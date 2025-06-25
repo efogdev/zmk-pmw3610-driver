@@ -109,8 +109,21 @@ static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi) {
     }
 
     // Convert CPI to register value
+    const struct pixart_config *config = dev->config;
     uint8_t value = (cpi / 200);
     LOG_INF("Setting CPI to %u (reg value 0x%x)", cpi, value);
+
+    if (config->xy_swap) {
+        value |= (1 << 7);
+    }
+
+    if (config->x_invert) {
+        value |= (1 << 6);
+    }
+
+    if (config->y_invert) {
+        value |= (1 << 5);
+    }
 
     /* set the cpi */
     uint8_t addr[] = {0x7F, PMW3610_REG_RES_STEP, 0x7F};
@@ -238,7 +251,7 @@ static int pmw3610_set_performance(const struct device *dev, bool enabled) {
         //   BIT 1-0: POSLO_RUN_RATE 0x0: 8ms; 0x1 4ms; 0x2 2ms; 0x4 Reserved
         uint8_t perf;
         if (config->force_awake_4ms_mode) {
-            perf = 0x0d; // RUN RATE @ 4ms
+            perf = 0x0e; // RUN RATE @ 4ms
         } else {
             // reset bit[3..0] to 0x0 (normal operation)
             perf = value & 0x0F; // RUN RATE @ 8ms
@@ -421,7 +434,7 @@ static int pmw3610_report_data(const struct device *dev) {
 
     int16_t x = TOINT16((buf[PMW3610_X_L_POS] + ((buf[PMW3610_XY_H_POS] & 0xF0) << 4)), 12);
     int16_t y = TOINT16((buf[PMW3610_Y_L_POS] + ((buf[PMW3610_XY_H_POS] & 0x0F) << 8)), 12);
-    LOG_DBG("x/y: %d/%d", x, y);
+    LOG_INF("PMW3610_RAW_DATA x:%d y:%d", x, y);
 
 #if IS_ENABLED(CONFIG_PMW3610_SWAP_XY)
     int16_t a = x;
@@ -653,6 +666,9 @@ static const struct sensor_driver_api pmw3610_driver_api = {
         .evt_type = DT_PROP(DT_DRV_INST(n), evt_type),                                             \
         .x_input_code = DT_PROP(DT_DRV_INST(n), x_input_code),                                     \
         .y_input_code = DT_PROP(DT_DRV_INST(n), y_input_code),                                     \
+        .xy_swap = DT_PROP(DT_DRV_INST(n), xy_swap),                                               \
+        .x_invert = DT_PROP(DT_DRV_INST(n), x_invert),                                             \
+        .y_invert = DT_PROP(DT_DRV_INST(n), y_invert),                                             \
         .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                       \
         .force_awake_4ms_mode = DT_PROP(DT_DRV_INST(n), force_awake_4ms_mode),                     \
     };                                                                                             \

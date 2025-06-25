@@ -26,3 +26,9 @@ properties:
     type: boolean
   force-awake-4ms-mode:
     type: boolean
+  xy-swap:
+    type: boolean
+  x-invert:
+    type: boolean
+  y-invert:
+    type: boolean
