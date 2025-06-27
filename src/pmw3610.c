@@ -17,6 +17,9 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(pmw3610, CONFIG_PMW3610_LOG_LEVEL);
 
+static struct k_work_delayable squal_log_work;
+static void pmw3610_log_squal_work(struct k_work *work);
+
 //////// Sensor initialization steps definition //////////
 // init is done in non-blocking manner (i.e., async), a //
 // delayable work is defined for this purpose           //
@@ -58,7 +61,7 @@ static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(const struct device *de
 
 //////// Function definitions //////////
 
-static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value, uint8_t len) {
+static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value, const uint8_t len) {
 	const struct pixart_config *cfg = dev->config;
 	const struct spi_buf tx_buf = { .buf = &addr, .len = sizeof(addr) };
 	const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
@@ -70,11 +73,11 @@ static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value, 
 	return spi_transceive_dt(&cfg->spi, &tx, &rx);
 }
 
-static int pmw3610_read_reg(const struct device *dev, uint8_t addr, uint8_t *value) {
+static int pmw3610_read_reg(const struct device *dev, const uint8_t addr, uint8_t *value) {
 	return pmw3610_read(dev, addr, value, 1);
 }
 
-static int pmw3610_write_reg(const struct device *dev, uint8_t addr, uint8_t value) {
+static int pmw3610_write_reg(const struct device *dev, const uint8_t addr, const uint8_t value) {
 	const struct pixart_config *cfg = dev->config;
 	uint8_t write_buf[] = {addr | SPI_WRITE_BIT, value};
 	const struct spi_buf tx_buf = { .buf = write_buf, .len = sizeof(write_buf), };
@@ -82,11 +85,11 @@ static int pmw3610_write_reg(const struct device *dev, uint8_t addr, uint8_t val
 	return spi_write_dt(&cfg->spi, &tx);
 }
 
-static int pmw3610_write(const struct device *dev, uint8_t reg, uint8_t val) {
+static int pmw3610_write(const struct device *dev, const uint8_t reg, const uint8_t val) {
 	pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_ENABLE);
 	k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
 
-    int err = pmw3610_write_reg(dev, reg, val);
+    const int err = pmw3610_write_reg(dev, reg, val);
     if (unlikely(err != 0)) {
         return err;
     }
@@ -95,7 +98,7 @@ static int pmw3610_write(const struct device *dev, uint8_t reg, uint8_t val) {
     return 0;
 }
 
-static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi) {
+static int pmw3610_set_cpi(const struct device *dev, const uint32_t cpi) {
     /* Set resolution with CPI step of 200 cpi
      * 0x1: 200 cpi (minimum cpi)
      * 0x2: 400 cpi
@@ -126,8 +129,8 @@ static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi) {
     }
 
     /* set the cpi */
-    uint8_t addr[] = {0x7F, PMW3610_REG_RES_STEP, 0x7F};
-    uint8_t data[] = {0xFF, value, 0x00};
+    const uint8_t addr[] = {0x7F, PMW3610_REG_RES_STEP, 0x7F};
+    const uint8_t data[] = {0xFF, value, 0x00};
 
 	pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_ENABLE);
 	k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
@@ -152,19 +155,19 @@ static int pmw3610_set_cpi(const struct device *dev, uint32_t cpi) {
 }
 
 /* Set sampling rate in each mode (in ms) */
-static int pmw3610_set_sample_time(const struct device *dev, uint8_t reg_addr, uint32_t sample_time) {
-    uint32_t maxtime = 2550;
-    uint32_t mintime = 10;
+static int pmw3610_set_sample_time(const struct device *dev, const uint8_t reg_addr, const uint32_t sample_time) {
+    const uint32_t maxtime = 2550;
+    const uint32_t mintime = 10;
     if ((sample_time > maxtime) || (sample_time < mintime)) {
         LOG_WRN("Sample time %u out of range [%u, %u]", sample_time, mintime, maxtime);
         return -EINVAL;
     }
 
-    uint8_t value = sample_time / mintime;
+    const uint8_t value = sample_time / mintime;
     LOG_INF("Set sample time to %u ms (reg value: 0x%x)", sample_time, value);
 
     /* The sample time is (reg_value * mintime ) ms. 0x00 is rounded to 0x1 */
-    int err = pmw3610_write(dev, reg_addr, value);
+    const int err = pmw3610_write(dev, reg_addr, value);
     if (err) {
         LOG_ERR("Failed to change sample time");
     }
@@ -175,7 +178,7 @@ static int pmw3610_set_sample_time(const struct device *dev, uint8_t reg_addr, u
 /* Set downshift time in ms. */
 // NOTE: The unit of run-mode downshift is related to pos mode rate, which is hard coded to be 4 ms
 // The pos-mode rate is configured in pmw3610_async_init_configure
-static int pmw3610_set_downshift_time(const struct device *dev, uint8_t reg_addr, uint32_t time) {
+static int pmw3610_set_downshift_time(const struct device *dev, const uint8_t reg_addr, const uint32_t time) {
     uint32_t maxtime;
     uint32_t mintime;
 
@@ -220,11 +223,11 @@ static int pmw3610_set_downshift_time(const struct device *dev, uint8_t reg_addr
     __ASSERT_NO_MSG((mintime > 0) && (maxtime / mintime <= UINT8_MAX));
 
     /* Convert time to register value */
-    uint8_t value = time / mintime;
+    const uint8_t value = time / mintime;
 
     LOG_INF("Set downshift time to %u ms (reg value 0x%x)", time, value);
 
-    int err = pmw3610_write(dev, reg_addr, value);
+    const int err = pmw3610_write(dev, reg_addr, value);
     if (err) {
         LOG_ERR("Failed to change downshift time");
     }
@@ -276,7 +279,7 @@ static int pmw3610_set_performance(const struct device *dev, bool enabled) {
 
 static int pmw3610_set_interrupt(const struct device *dev, const bool en) {
     const struct pixart_config *config = dev->config;
-    int ret = gpio_pin_interrupt_configure_dt(&config->irq_gpio,
+    const int ret = gpio_pin_interrupt_configure_dt(&config->irq_gpio,
                                               en ? GPIO_INT_LEVEL_ACTIVE : GPIO_INT_DISABLE);
     if (ret < 0) {
         LOG_ERR("can't set interrupt");
@@ -285,7 +288,7 @@ static int pmw3610_set_interrupt(const struct device *dev, const bool en) {
 }
 
 static int pmw3610_async_init_power_up(const struct device *dev) {
-	int ret = pmw3610_write_reg(dev, PMW3610_REG_POWER_UP_RESET, PMW3610_POWERUP_CMD_RESET);
+	const int ret = pmw3610_write_reg(dev, PMW3610_REG_POWER_UP_RESET, PMW3610_POWERUP_CMD_RESET);
     if (ret < 0) {
         return ret;
     }
@@ -377,6 +380,11 @@ static int pmw3610_async_init_configure(const struct device *dev) {
         return err;
     }
 
+    if (CONFIG_PMW3610_SQUAL_LOG) {
+        k_work_init_delayable(&squal_log_work, pmw3610_log_squal_work);
+        k_work_schedule(&squal_log_work, K_MSEC(CONFIG_PMW3610_SQUAL_LOG_INTERVAL));
+    }
+
     return 0;
 }
 
@@ -419,10 +427,10 @@ static int pmw3610_report_data(const struct device *dev) {
 #if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
     static int64_t last_smp_time = 0;
     static int64_t last_rpt_time = 0;
-    int64_t now = k_uptime_get();
+    const int64_t now = k_uptime_get();
 #endif
 
-	int err = pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_BURST_SIZE);
+	const int err = pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_BURST_SIZE);
     if (err) {
         return err;
     }
@@ -434,7 +442,7 @@ static int pmw3610_report_data(const struct device *dev) {
 
     int16_t x = TOINT16((buf[PMW3610_X_L_POS] + ((buf[PMW3610_XY_H_POS] & 0xF0) << 4)), 12);
     int16_t y = TOINT16((buf[PMW3610_Y_L_POS] + ((buf[PMW3610_XY_H_POS] & 0x0F) << 8)), 12);
-    LOG_INF("PMW3610_RAW_DATA x:%d y:%d", x, y);
+    // LOG_INF("PMW3610_RAW_DATA x:%d y:%d", x, y);
 
 #if IS_ENABLED(CONFIG_PMW3610_SWAP_XY)
     int16_t a = x;
@@ -449,7 +457,7 @@ static int pmw3610_report_data(const struct device *dev) {
 #endif
 
 #ifdef CONFIG_PMW3610_SMART_ALGORITHM
-    int16_t shutter = ((int16_t)(buf[PMW3610_SHUTTER_H_POS] & 0x01) << 8) 
+    const int16_t shutter = ((int16_t)(buf[PMW3610_SHUTTER_H_POS] & 0x01) << 8)
                     + buf[PMW3610_SHUTTER_L_POS];
     if (data->sw_smart_flag && shutter < 45) {
         pmw3610_write(dev, 0x32, 0x00);
@@ -482,10 +490,10 @@ static int pmw3610_report_data(const struct device *dev) {
 #endif
 
     // fetch report value
-    int16_t rx = (int16_t)CLAMP(dx, INT16_MIN, INT16_MAX);
-    int16_t ry = (int16_t)CLAMP(dy, INT16_MIN, INT16_MAX);
-    bool have_x = rx != 0;
-    bool have_y = ry != 0;
+    const int16_t rx = (int16_t)CLAMP(dx, INT16_MIN, INT16_MAX);
+    const int16_t ry = (int16_t)CLAMP(dy, INT16_MIN, INT16_MAX);
+    const bool have_x = rx != 0;
+    const bool have_y = ry != 0;
 
     if (have_x || have_y) {
 #if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
@@ -513,7 +521,7 @@ static void pmw3610_gpio_callback(const struct device *gpiob, struct gpio_callba
 }
 
 static void pmw3610_work_callback(struct k_work *work) {
-    struct pixart_data *data = CONTAINER_OF(work, struct pixart_data, trigger_work);
+    const struct pixart_data *data = CONTAINER_OF(work, struct pixart_data, trigger_work);
     const struct device *dev = data->dev;
     pmw3610_report_data(dev);
     pmw3610_set_interrupt(dev, true);
@@ -585,9 +593,9 @@ static int pmw3610_init(const struct device *dev) {
     return err;
 }
 
-static int pmw3610_attr_set(const struct device *dev, enum sensor_channel chan,
-                            enum sensor_attribute attr, const struct sensor_value *val) {
-    struct pixart_data *data = dev->data;
+static int pmw3610_attr_set(const struct device *dev, const enum sensor_channel chan,
+                            const enum sensor_attribute attr, const struct sensor_value *val) {
+    const struct pixart_data *data = dev->data;
     int err;
 
     if (unlikely(chan != SENSOR_CHAN_ALL)) {
@@ -692,12 +700,33 @@ static int on_activity_state(const zmk_event_t *eh) {
         return 0;
     }
 
-    bool enable = state_ev->state == ZMK_ACTIVITY_ACTIVE ? 1 : 0;
+    const bool enable = state_ev->state == ZMK_ACTIVITY_ACTIVE ? 1 : 0;
     for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
         pmw3610_set_performance(pmw3610_devs[i], enable);
     }
 
     return 0;
+}
+
+static void pmw3610_log_squal_work(struct k_work *work) {
+    for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
+        const struct device *dev = pmw3610_devs[i];
+        const struct pixart_data *data = dev->data;
+        
+        if (data->ready) {
+            uint8_t squal_value;
+            const int err = pmw3610_read_reg(dev, PMW3610_REG_SQUAL, &squal_value);
+            uint16_t corrected_squal = ((uint16_t) squal_value) << 1;
+
+            if (err == 0) {
+                LOG_INF("surface quality = %d/361", corrected_squal);
+            } else {
+                LOG_ERR("failed to read SQUAL register: %d", err);
+            }
+        }
+    }
+    
+    k_work_schedule(&squal_log_work, K_MSEC(CONFIG_PMW3610_SQUAL_LOG_INTERVAL));
 }
 
 ZMK_LISTENER(zmk_pmw3610_idle_sleeper, on_activity_state);
