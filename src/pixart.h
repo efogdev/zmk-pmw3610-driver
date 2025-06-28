@@ -42,7 +42,7 @@ struct pixart_config {
     bool x_invert;
     bool y_invert;
     bool force_awake;
-    bool force_awake_4ms_mode;
+    bool force_high_performance;
 };
 
 #ifdef __cplusplus

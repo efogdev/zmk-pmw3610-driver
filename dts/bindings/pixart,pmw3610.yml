@@ -24,7 +24,7 @@ properties:
     required: true
   force-awake:
     type: boolean
-  force-awake-4ms-mode:
+  force-high-performance:
     type: boolean
   xy-swap:
     type: boolean

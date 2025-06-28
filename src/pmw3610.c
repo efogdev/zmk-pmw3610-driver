@@ -253,8 +253,8 @@ static int pmw3610_set_performance(const struct device *dev, bool enabled) {
         //   BIT 2:   POSHI_RUN_RATE 0x0: 8ms; 0x1 4ms;
         //   BIT 1-0: POSLO_RUN_RATE 0x0: 8ms; 0x1 4ms; 0x2 2ms; 0x4 Reserved
         uint8_t perf;
-        if (config->force_awake_4ms_mode) {
-            perf = 0x0e; // RUN RATE @ 4ms
+        if (config->force_high_performance) {
+            perf = 0x5d; // RUN RATE @ 2ms
         } else {
             // reset bit[3..0] to 0x0 (normal operation)
             perf = value & 0x0F; // RUN RATE @ 8ms
@@ -678,7 +678,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
         .x_invert = DT_PROP(DT_DRV_INST(n), x_invert),                                             \
         .y_invert = DT_PROP(DT_DRV_INST(n), y_invert),                                             \
         .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                       \
-        .force_awake_4ms_mode = DT_PROP(DT_DRV_INST(n), force_awake_4ms_mode),                     \
+        .force_high_performance = DT_PROP(DT_DRV_INST(n), force_high_performance),                 \
     };                                                                                             \
     DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n, POST_KERNEL,                \
                           CONFIG_INPUT_PMW3610_INIT_PRIORITY, &pmw3610_driver_api);
@@ -716,12 +716,22 @@ static void pmw3610_log_squal_work(struct k_work *work) {
         if (data->ready) {
             uint8_t squal_value;
             const int err = pmw3610_read_reg(dev, PMW3610_REG_SQUAL, &squal_value);
-            uint16_t corrected_squal = ((uint16_t) squal_value) << 1;
+            const uint16_t corrected_squal = ((uint16_t) squal_value) << 1;
 
             if (err == 0) {
-                LOG_INF("surface quality = %d/361", corrected_squal);
+                if (corrected_squal != 0) {
+                    LOG_DBG("idx:%d surface_quality: %d/361", i, corrected_squal);
+                }
+
+                if (corrected_squal < 50) {
+                    LOG_ERR("idx:%d no surface detected", i);
+                } else if (corrected_squal < 250) {
+                    LOG_WRN("idx:%d check sensor: bad surface quality (%d/361), expect warping", i, corrected_squal);
+                } else if (corrected_squal < 275) {
+                    LOG_WRN("idx:%d surface quality is sub-optimal (%d/361), warping is possible", i, corrected_squal);
+                }
             } else {
-                LOG_ERR("failed to read SQUAL register: %d", err);
+                LOG_ERR("idx:%d failed to read SQUAL register: %d", i, err);
             }
         }
     }

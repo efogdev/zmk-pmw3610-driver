@@ -57,8 +57,8 @@ config PMW3610_SQUAL_LOG
 
 config PMW3610_SQUAL_LOG_INTERVAL
     int "PMW3610's surface quality log interval"
-    default 256
-    range 64 4096
+    default 512
+    range 16 4096
 
 config PMW3610_RUN_DOWNSHIFT_TIME_MS
     int "PMW3610's default RUN mode downshift time"
