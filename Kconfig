@@ -53,7 +53,9 @@ config PMW3610_SMART_ALGORITHM
 
 config PMW3610_SQUAL_LOG
     bool "PMW3610's surface quality (0-361) log"
-    default y
+    default n
+    help
+      Enable only for debugging! Will prevent sensors from going to rest.
 
 config PMW3610_SQUAL_LOG_INTERVAL
     int "PMW3610's surface quality log interval"

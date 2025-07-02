@@ -114,7 +114,7 @@ static int pmw3610_set_cpi(const struct device *dev, const uint32_t cpi) {
     // Convert CPI to register value
     const struct pixart_config *config = dev->config;
     uint8_t value = (cpi / 200);
-    LOG_INF("Setting CPI to %u (reg value 0x%x)", cpi, value);
+    LOG_DBG("Setting CPI to %u (reg value 0x%x)", cpi, value);
 
     if (config->xy_swap) {
         value |= (1 << 7);
@@ -164,7 +164,7 @@ static int pmw3610_set_sample_time(const struct device *dev, const uint8_t reg_a
     }
 
     const uint8_t value = sample_time / mintime;
-    LOG_INF("Set sample time to %u ms (reg value: 0x%x)", sample_time, value);
+    LOG_DBG("Set sample time to %u ms (reg value: 0x%x)", sample_time, value);
 
     /* The sample time is (reg_value * mintime ) ms. 0x00 is rounded to 0x1 */
     const int err = pmw3610_write(dev, reg_addr, value);
@@ -225,7 +225,7 @@ static int pmw3610_set_downshift_time(const struct device *dev, const uint8_t re
     /* Convert time to register value */
     const uint8_t value = time / mintime;
 
-    LOG_INF("Set downshift time to %u ms (reg value 0x%x)", time, value);
+    LOG_DBG("Set downshift time to %u ms (reg value 0x%x)", time, value);
 
     const int err = pmw3610_write(dev, reg_addr, value);
     if (err) {
@@ -246,7 +246,7 @@ static int pmw3610_set_performance(const struct device *dev, bool enabled) {
             LOG_ERR("Can't read ref-performance %d", err);
             return err;
         }
-        LOG_INF("Get performance register (reg value 0x%x)", value);
+        LOG_DBG("Get performance register (reg value 0x%x)", value);
 
         // Set prefered RUN RATE        
         //   BIT 3:   VEL_RUNRATE    0x0: 8ms; 0x1 4ms;
@@ -254,7 +254,7 @@ static int pmw3610_set_performance(const struct device *dev, bool enabled) {
         //   BIT 1-0: POSLO_RUN_RATE 0x0: 8ms; 0x1 4ms; 0x2 2ms; 0x4 Reserved
         uint8_t perf;
         if (config->force_high_performance) {
-            perf = 0x5d; // RUN RATE @ 2ms
+            perf = 0x0e; // RUN RATE @ 4/2ms
         } else {
             // reset bit[3..0] to 0x0 (normal operation)
             perf = value & 0x0F; // RUN RATE @ 8ms
@@ -269,9 +269,9 @@ static int pmw3610_set_performance(const struct device *dev, bool enabled) {
                 LOG_ERR("Can't write performance register %d", err);
                 return err;
             }
-            LOG_INF("Set performance register (reg value 0x%x)", perf);
+            LOG_DBG("Set performance register (reg value 0x%x)", perf);
         }
-        LOG_INF("%s performance mode", enabled ? "enable" : "disable");
+        LOG_DBG("%s performance mode", enabled ? "enable" : "disable");
     }
 
     return err;
@@ -380,10 +380,10 @@ static int pmw3610_async_init_configure(const struct device *dev) {
         return err;
     }
 
-    if (CONFIG_PMW3610_SQUAL_LOG) {
-        k_work_init_delayable(&squal_log_work, pmw3610_log_squal_work);
-        k_work_schedule(&squal_log_work, K_MSEC(CONFIG_PMW3610_SQUAL_LOG_INTERVAL));
-    }
+#if IS_ENABLED(CONFIG_PMW3610_SQUAL_LOG)
+    k_work_init_delayable(&squal_log_work, pmw3610_log_squal_work);
+    k_work_schedule(&squal_log_work, K_MSEC(CONFIG_PMW3610_SQUAL_LOG_INTERVAL));
+#endif
 
     return 0;
 }
@@ -392,18 +392,34 @@ static void pmw3610_async_init(struct k_work *work) {
     struct k_work_delayable *work2 = (struct k_work_delayable *)work;
     struct pixart_data *data = CONTAINER_OF(work2, struct pixart_data, init_work);
     const struct device *dev = data->dev;
+    const struct pixart_config *config = dev->config;
 
-    LOG_INF("PMW3610 async init step %d", data->async_init_step);
+    LOG_DBG("PMW3610 async init step %d", data->async_init_step);
 
     data->err = async_init_fn[data->async_init_step](dev);
     if (data->err) {
         LOG_ERR("PMW3610 initialization failed in step %d", data->async_init_step);
+        
+        if (data->init_retry_attempts > 0) {
+            data->init_retry_attempts--;
+            data->init_retry_count++;
+            LOG_WRN("PMW3610 retrying initialization (attempt %d/%d)", 
+                    data->init_retry_count, config->init_retry_count);
+            
+            data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
+            k_work_schedule(&data->init_work, K_MSEC(config->init_retry_interval));
+        } else {
+            LOG_ERR("PMW3610 initialization failed after %d attempts", config->init_retry_count);
+        }
     } else {
         data->async_init_step++;
 
         if (data->async_init_step == ASYNC_INIT_STEP_COUNT) {
-            data->ready = true; // sensor is ready to work
-            LOG_INF("PMW3610 initialized");
+            data->ready = true; 
+            LOG_INF("PMW3610 initialized successfully");
+            if (data->init_retry_count > 0) {
+                LOG_INF("PMW3610 initialization succeeded after %d retries", data->init_retry_count);
+            }
             pmw3610_set_interrupt(dev, true);
         } else {
             k_work_schedule(&data->init_work, K_MSEC(async_init_delay[data->async_init_step]));
@@ -442,7 +458,7 @@ static int pmw3610_report_data(const struct device *dev) {
 
     int16_t x = TOINT16((buf[PMW3610_X_L_POS] + ((buf[PMW3610_XY_H_POS] & 0xF0) << 4)), 12);
     int16_t y = TOINT16((buf[PMW3610_Y_L_POS] + ((buf[PMW3610_XY_H_POS] & 0x0F) << 8)), 12);
-    // LOG_INF("PMW3610_RAW_DATA x:%d y:%d", x, y);
+    LOG_DBG("PMW3610_RAW x:%d y:%d", x, y);
 
 #if IS_ENABLED(CONFIG_PMW3610_SWAP_XY)
     int16_t a = x;
@@ -572,6 +588,9 @@ static int pmw3610_init(const struct device *dev) {
     // init smart algorithm flag;
     data->sw_smart_flag = false;
 
+    data->init_retry_count = 0;
+    data->init_retry_attempts = config->init_retry_count;
+
     // init trigger handler work
     k_work_init(&data->trigger_work, pmw3610_work_callback);
 
@@ -679,6 +698,8 @@ static const struct sensor_driver_api pmw3610_driver_api = {
         .y_invert = DT_PROP(DT_DRV_INST(n), y_invert),                                             \
         .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                       \
         .force_high_performance = DT_PROP(DT_DRV_INST(n), force_high_performance),                 \
+        .init_retry_count = DT_PROP(DT_DRV_INST(n), init_retry_count),                             \
+        .init_retry_interval = DT_PROP(DT_DRV_INST(n), init_retry_interval),                       \
     };                                                                                             \
     DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n, POST_KERNEL,                \
                           CONFIG_INPUT_PMW3610_INIT_PRIORITY, &pmw3610_driver_api);

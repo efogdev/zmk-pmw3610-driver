@@ -32,3 +32,11 @@ properties:
     type: boolean
   y-invert:
     type: boolean
+  init-retry-count:
+    type: int
+    default: 3
+    description: "Number of initialization retry attempts"
+  init-retry-interval:
+    type: int
+    default: 100
+    description: "Interval between initialization retries in milliseconds"
