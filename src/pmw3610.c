@@ -5,6 +5,7 @@
  */
 
 #define DT_DRV_COMPAT pixart_pmw3610
+#define IGNORE_FIRST_N 8 // ToDo move to config?
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/byteorder.h>
@@ -427,6 +428,8 @@ static void pmw3610_async_init(struct k_work *work) {
     }
 }
 
+static uint8_t data_index = 0;
+static bool data_ready = false;
 static int pmw3610_report_data(const struct device *dev) {
     struct pixart_data *data = dev->data;
     const struct pixart_config *config = dev->config;
@@ -440,17 +443,18 @@ static int pmw3610_report_data(const struct device *dev) {
     static int64_t dx = 0;
     static int64_t dy = 0;
 
-#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
-    static int64_t last_smp_time = 0;
-    static int64_t last_rpt_time = 0;
-    const int64_t now = k_uptime_get();
-#endif
-
 	const int err = pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_BURST_SIZE);
     if (err) {
         return err;
     }
     // LOG_HEXDUMP_DBG(buf, PMW3610_BURST_SIZE, "buf");
+
+    if (!data_ready) {
+        if (++data_index >= IGNORE_FIRST_N) {
+            data_ready = true;
+        }
+        return 0;
+    }
 
 // 12-bit two's complement value to int16_t
 // adapted from https://stackoverflow.com/questions/70802306/convert-a-12-bit-signed-number-in-c
@@ -458,7 +462,7 @@ static int pmw3610_report_data(const struct device *dev) {
 
     int16_t x = TOINT16((buf[PMW3610_X_L_POS] + ((buf[PMW3610_XY_H_POS] & 0xF0) << 4)), 12);
     int16_t y = TOINT16((buf[PMW3610_Y_L_POS] + ((buf[PMW3610_XY_H_POS] & 0x0F) << 8)), 12);
-    LOG_DBG("PMW3610_RAW x:%d y:%d", x, y);
+	LOG_DBG("(sensor=%d) X: %4d, Y: %4d", config->id, x, y);
 
 #if IS_ENABLED(CONFIG_PMW3610_SWAP_XY)
     int16_t a = x;
@@ -485,25 +489,9 @@ static int pmw3610_report_data(const struct device *dev) {
     }
 #endif
 
-#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
-    // purge accumulated delta, if last sampled had not been reported on last report tick
-    if (now - last_smp_time >= CONFIG_PMW3610_REPORT_INTERVAL_MIN) {
-        dx = 0;
-        dy = 0;
-    }
-    last_smp_time = now;
-#endif
-
     // accumulate delta until report in next iteration
     dx += x;
     dy += y;
-
-#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
-    // strict to report inerval
-    if (now - last_rpt_time < CONFIG_PMW3610_REPORT_INTERVAL_MIN) {
-        return 0;
-    }
-#endif
 
     // fetch report value
     const int16_t rx = (int16_t)CLAMP(dx, INT16_MIN, INT16_MAX);
@@ -512,9 +500,6 @@ static int pmw3610_report_data(const struct device *dev) {
     const bool have_y = ry != 0;
 
     if (have_x || have_y) {
-#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
-        last_rpt_time = now;
-#endif
         dx = 0;
         dy = 0;
         if (have_x) {
@@ -687,6 +672,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
 #define PMW3610_DEFINE(n)                                                                          \
     static struct pixart_data data##n;                                                             \
     static const struct pixart_config config##n = {                                                \
+        .id = n,                                                                                   \
 		.spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),		                               \
         .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                           \
         .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                                       \

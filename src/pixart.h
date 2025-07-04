@@ -34,6 +34,7 @@ struct pixart_data {
 
 // device config data structure
 struct pixart_config {
+    uint8_t id;
 	struct spi_dt_spec spi;
     struct gpio_dt_spec irq_gpio;
     uint16_t cpi;
