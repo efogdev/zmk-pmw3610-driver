@@ -5,7 +5,6 @@
  */
 
 #define DT_DRV_COMPAT pixart_pmw3610
-#define IGNORE_FIRST_N 8 // ToDo move to config?
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/byteorder.h>
@@ -428,8 +427,6 @@ static void pmw3610_async_init(struct k_work *work) {
     }
 }
 
-static uint8_t data_index = 0;
-static bool data_ready = false;
 static int pmw3610_report_data(const struct device *dev) {
     struct pixart_data *data = dev->data;
     const struct pixart_config *config = dev->config;
@@ -449,9 +446,9 @@ static int pmw3610_report_data(const struct device *dev) {
     }
     // LOG_HEXDUMP_DBG(buf, PMW3610_BURST_SIZE, "buf");
 
-    if (!data_ready) {
-        if (++data_index >= IGNORE_FIRST_N) {
-            data_ready = true;
+    if (!data->data_ready) {
+        if (++data->data_index >= CONFIG_PMW3610_IGNORE_FIRST_N) {
+            data->data_ready = true;
         }
         return 0;
     }
@@ -710,6 +707,11 @@ static int on_activity_state(const zmk_event_t *eh) {
     const bool enable = state_ev->state == ZMK_ACTIVITY_ACTIVE ? 1 : 0;
     for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
         pmw3610_set_performance(pmw3610_devs[i], enable);
+
+        if (!enable) {
+            struct pixart_data *data = pmw3610_devs[i]->data;
+            data->data_ready = false;
+        }
     }
 
     return 0;

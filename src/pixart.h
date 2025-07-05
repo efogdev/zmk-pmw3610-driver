@@ -30,6 +30,10 @@ struct pixart_data {
 
     bool                         ready; // whether init is finished successfully
     int                          err; // error code during async init
+
+    // to ingore first N events
+    bool                         data_ready;
+    uint8_t                      data_index;
 };
 
 // device config data structure
