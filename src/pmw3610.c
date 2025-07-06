@@ -446,13 +446,6 @@ static int pmw3610_report_data(const struct device *dev) {
     }
     // LOG_HEXDUMP_DBG(buf, PMW3610_BURST_SIZE, "buf");
 
-    if (!data->data_ready) {
-        if (++data->data_index >= CONFIG_PMW3610_IGNORE_FIRST_N) {
-            data->data_ready = true;
-        }
-        return 0;
-    }
-
 // 12-bit two's complement value to int16_t
 // adapted from https://stackoverflow.com/questions/70802306/convert-a-12-bit-signed-number-in-c
 #define TOINT16(val, bits) (((struct { int16_t value : bits; }){val}).value)
@@ -485,6 +478,13 @@ static int pmw3610_report_data(const struct device *dev) {
         data->sw_smart_flag = true;
     }
 #endif
+
+    if (!data->data_ready) {
+        if (++data->data_index >= CONFIG_PMW3610_IGNORE_FIRST_N) {
+            data->data_ready = true;
+        }
+        return 0;
+    }
 
     // accumulate delta until report in next iteration
     dx += x;
@@ -711,6 +711,7 @@ static int on_activity_state(const zmk_event_t *eh) {
         if (!enable) {
             struct pixart_data *data = pmw3610_devs[i]->data;
             data->data_ready = false;
+            data->data_index = 0;
         }
     }
 
