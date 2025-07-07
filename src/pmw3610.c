@@ -17,8 +17,10 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(pmw3610, CONFIG_PMW3610_LOG_LEVEL);
 
+#if IS_ENABLED(CONFIG_PMW3610_SQUAL_LOG)
 static struct k_work_delayable squal_log_work;
 static void pmw3610_log_squal_work(struct k_work *work);
+#endif
 
 //////// Sensor initialization steps definition //////////
 // init is done in non-blocking manner (i.e., async), a //
@@ -136,7 +138,7 @@ static int pmw3610_set_cpi(const struct device *dev, const uint32_t cpi) {
 	k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
 
     /* Write data */
-    int err;
+    int err = 0;
     for (size_t i = 0; i < sizeof(data); i++) {
         err = pmw3610_write_reg(dev, addr[i], data[i]);
         if (err) {
@@ -235,7 +237,7 @@ static int pmw3610_set_downshift_time(const struct device *dev, const uint8_t re
     return err;
 }
 
-static int pmw3610_set_performance(const struct device *dev, bool enabled) {
+static int pmw3610_set_performance(const struct device *dev, const bool enabled) {
     const struct pixart_config *config = dev->config;
     int err = 0;
 
@@ -718,6 +720,7 @@ static int on_activity_state(const zmk_event_t *eh) {
     return 0;
 }
 
+#if IS_ENABLED(CONFIG_PMW3610_SQUAL_LOG)
 static void pmw3610_log_squal_work(struct k_work *work) {
     for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
         const struct device *dev = pmw3610_devs[i];
@@ -748,6 +751,7 @@ static void pmw3610_log_squal_work(struct k_work *work) {
     
     k_work_schedule(&squal_log_work, K_MSEC(CONFIG_PMW3610_SQUAL_LOG_INTERVAL));
 }
+#endif
 
 ZMK_LISTENER(zmk_pmw3610_idle_sleeper, on_activity_state);
 ZMK_SUBSCRIPTION(zmk_pmw3610_idle_sleeper, zmk_activity_state_changed);
