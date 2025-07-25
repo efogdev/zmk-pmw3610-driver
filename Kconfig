@@ -32,6 +32,10 @@ config PMW3610_IGNORE_FIRST_N
   int "Ignore first N events to avoid warping"
   default 4
 
+config PMW3610_IGNORE_AFTER_REST
+  bool "Ignore first events after rest too"
+  default n
+
 config PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS
   int "Extra power up init delay (ms)"
   default 0

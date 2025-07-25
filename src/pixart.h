@@ -31,9 +31,12 @@ struct pixart_data {
     bool                         ready; // whether init is finished successfully
     int                          err; // error code during async init
 
-    // to ingore first N events
     bool                         data_ready;
     uint8_t                      data_index;
+
+#if IS_ENABLED(CONFIG_PMW3610_IGNORE_AFTER_REST)
+    uint64_t                     last_data;
+#endif
 };
 
 // device config data structure

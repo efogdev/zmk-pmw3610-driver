@@ -448,6 +448,16 @@ static int pmw3610_report_data(const struct device *dev) {
     }
     // LOG_HEXDUMP_DBG(buf, PMW3610_BURST_SIZE, "buf");
 
+#if IS_ENABLED(CONFIG_PMW3610_IGNORE_AFTER_REST)
+    const int64_t now = k_uptime_get();
+    if (now - data->last_data > CONFIG_PMW3610_REST2_DOWNSHIFT_TIME_MS) {
+        data->data_index = 0;
+        data->data_ready = false;
+    }
+
+    data->last_data = now;
+#endif
+
 // 12-bit two's complement value to int16_t
 // adapted from https://stackoverflow.com/questions/70802306/convert-a-12-bit-signed-number-in-c
 #define TOINT16(val, bits) (((struct { int16_t value : bits; }){val}).value)
