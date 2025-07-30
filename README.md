@@ -1,6 +1,6 @@
 # PMW3610 driver for ZMK
 
-This work is based on [badjeff's driver](https://github.com/ufan/zmk/tree/support-trackpad) with minor quality of life improvements (and 500 Hz). See badjeff's README for installation and usage.
+This work is based on [badjeff's driver](https://github.com/badjeff/zmk-pmw3610-driver) with minor quality of life improvements (and 500 Hz). See badjeff's README for installation and usage.
 
 ### Differences 
 
