@@ -432,13 +432,18 @@ static void pmw3610_async_init(struct k_work *work) {
 static int pmw3610_report_data(const struct device *dev) {
     struct pixart_data *data = dev->data;
     const struct pixart_config *config = dev->config;
-    uint8_t buf[PMW3610_BURST_SIZE];
+
+#if IS_ENABLED(CONFIG_PMW3610_IGNORE_AFTER_REST) || IS_ENABLED(CONFIG_PMW3610_ANTI_WARP)
+    const int64_t now = k_uptime_get();
+    const int64_t passed = now - data->last_data;
+#endif
 
     if (unlikely(!data->ready)) {
         LOG_WRN("Device is not initialized yet");
         return -EBUSY;
     }
 
+    uint8_t buf[PMW3610_BURST_SIZE];
     static int64_t dx = 0;
     static int64_t dy = 0;
 
@@ -448,17 +453,7 @@ static int pmw3610_report_data(const struct device *dev) {
     }
     // LOG_HEXDUMP_DBG(buf, PMW3610_BURST_SIZE, "buf");
 
-#if IS_ENABLED(CONFIG_PMW3610_IGNORE_AFTER_REST)
-    const int64_t now = k_uptime_get();
-    if (now - data->last_data > CONFIG_PMW3610_REST2_DOWNSHIFT_TIME_MS) {
-        data->data_index = 0;
-        data->data_ready = false;
-    }
-
-    data->last_data = now;
-#endif
-
-// 12-bit two's complement value to int16_t
+    // 12-bit two's complement value to int16_t
 // adapted from https://stackoverflow.com/questions/70802306/convert-a-12-bit-signed-number-in-c
 #define TOINT16(val, bits) (((struct { int16_t value : bits; }){val}).value)
 
@@ -478,6 +473,24 @@ static int pmw3610_report_data(const struct device *dev) {
     y = -y;
 #endif
 
+#if IS_ENABLED(CONFIG_PMW3610_IGNORE_AFTER_REST)
+    if (passed > CONFIG_PMW3610_RUN_DOWNSHIFT_TIME_MS + CONFIG_PMW3610_REST1_DOWNSHIFT_TIME_MS + CONFIG_PMW3610_REST2_DOWNSHIFT_TIME_MS) {
+        data->data_index = 0;
+        data->data_ready = false;
+    }
+#endif
+
+#if IS_ENABLED(CONFIG_PMW3610_ANTI_WARP)
+    if (passed > CONFIG_PMW3610_ANTI_WARP_INACTIVITY_MS &&
+        (x > CONFIG_PMW3610_ANTI_WARP_THRES || y > CONFIG_PMW3610_ANTI_WARP_THRES) &&
+        data->data_ready) {
+        data->last_data = now;
+        data->data_index = 0;
+        data->data_ready = false;
+        LOG_WRN("Discarded large movement after inactivity, likely warping");
+    }
+#endif
+
 #ifdef CONFIG_PMW3610_SMART_ALGORITHM
     const int16_t shutter = ((int16_t)(buf[PMW3610_SHUTTER_H_POS] & 0x01) << 8)
                     + buf[PMW3610_SHUTTER_L_POS];
@@ -489,6 +502,10 @@ static int pmw3610_report_data(const struct device *dev) {
         pmw3610_write(dev, 0x32, 0x80);
         data->sw_smart_flag = true;
     }
+#endif
+
+#if IS_ENABLED(CONFIG_PMW3610_IGNORE_AFTER_REST) || IS_ENABLED(CONFIG_PMW3610_ANTI_WARP)
+    data->last_data = now;
 #endif
 
     if (!data->data_ready) {

@@ -34,7 +34,7 @@ struct pixart_data {
     bool                         data_ready;
     uint8_t                      data_index;
 
-#if IS_ENABLED(CONFIG_PMW3610_IGNORE_AFTER_REST)
+#if IS_ENABLED(CONFIG_PMW3610_IGNORE_AFTER_REST) || IS_ENABLED(CONFIG_PMW3610_ANTI_WARP)
     uint64_t                     last_data;
 #endif
 };

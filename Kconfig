@@ -36,6 +36,18 @@ config PMW3610_IGNORE_AFTER_REST
   bool "Ignore first events after rest too"
   default n
 
+config PMW3610_ANTI_WARP
+  bool "Discard large movement after inactivity"
+  default n
+
+config PMW3610_ANTI_WARP_THRES
+  int "Movement less than this value is allowed"
+  default 64
+
+config PMW3610_ANTI_WARP_INACTIVITY_MS
+  int "Inactivity, msec"
+  default 10000
+
 config PMW3610_INIT_POWER_UP_EXTRA_DELAY_MS
   int "Extra power up init delay (ms)"
   default 0
