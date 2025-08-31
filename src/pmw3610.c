@@ -611,6 +611,14 @@ static int pmw3610_init(const struct device *dev) {
         return err;
     }
 
+    if (config->rst_gpio.port != NULL && config->enable_pm_support) {
+        if (gpio_pin_configure_dt(&config->rst_gpio, GPIO_OUTPUT) != 0) {
+            LOG_ERR("Failed to configure RST GPIO");
+        } else {
+            gpio_pin_set_dt(&config->rst_gpio, 0);
+        }
+    }
+
     // Setup delayable and non-blocking init jobs, including following steps:
     // 1. power reset
     // 2. upload initial settings
@@ -678,19 +686,19 @@ static const struct sensor_driver_api pmw3610_driver_api = {
     .attr_set = pmw3610_attr_set,
 };
 
-// #if IS_ENABLED(CONFIG_PM_DEVICE)
-// static int pmw3610_pm_action(const struct device *dev, enum pm_device_action action) {
-//     switch (action) {
-//     case PM_DEVICE_ACTION_SUSPEND:
-//         return pmw3610_set_interrupt(dev, false);
-//     case PM_DEVICE_ACTION_RESUME:
-//         return pmw3610_set_interrupt(dev, true);
-//     default:
-//         return -ENOTSUP;
-//     }
-// }
-// #endif // IS_ENABLED(CONFIG_PM_DEVICE)
-// PM_DEVICE_DT_INST_DEFINE(n, pmw3610_pm_action);
+#if IS_ENABLED(CONFIG_PM_DEVICE)
+static int pmw3610_pm_action(const struct device *dev, enum pm_device_action action) {
+    switch (action) {
+    case PM_DEVICE_ACTION_SUSPEND:
+        return pmw3610_set_interrupt(dev, false);
+    case PM_DEVICE_ACTION_RESUME:
+        return pmw3610_set_interrupt(dev, true);
+    default:
+        return -ENOTSUP;
+    }
+}
+#endif // IS_ENABLED(CONFIG_PM_DEVICE)
+PM_DEVICE_DT_INST_DEFINE(n, pmw3610_pm_action);
 
 #define PMW3610_SPI_MODE (SPI_OP_MODE_MASTER | SPI_WORD_SET(8) | SPI_MODE_CPOL | \
                         SPI_MODE_CPHA | SPI_TRANSFER_MSB)
@@ -701,6 +709,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
         .id = n,                                                                                   \
 		.spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),		                               \
         .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                           \
+        .rst_gpio = GPIO_DT_SPEC_INST_GET_OR(n, rst_gpios, { .port = NULL }),                      \
         .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                                       \
         .evt_type = DT_PROP(DT_DRV_INST(n), evt_type),                                             \
         .x_input_code = DT_PROP(DT_DRV_INST(n), x_input_code),                                     \
@@ -710,6 +719,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
         .y_invert = DT_PROP(DT_DRV_INST(n), y_invert),                                             \
         .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                       \
         .force_high_performance = DT_PROP(DT_DRV_INST(n), force_high_performance),                 \
+        .enable_pm_support = DT_PROP(DT_DRV_INST(n), enable_pm_support),                           \
         .init_retry_count = DT_PROP(DT_DRV_INST(n), init_retry_count),                             \
         .init_retry_interval = DT_PROP(DT_DRV_INST(n), init_retry_interval),                       \
     };                                                                                             \
@@ -733,12 +743,26 @@ static int on_activity_state(const zmk_event_t *eh) {
         return 0;
     }
 
-    const bool enable = state_ev->state == ZMK_ACTIVITY_ACTIVE ? 1 : 0;
+    const bool enable = state_ev->state != ZMK_ACTIVITY_SLEEP ? 1 : 0;
     for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
-        pmw3610_set_performance(pmw3610_devs[i], enable);
+        const struct pixart_config *config = pmw3610_devs[i]->config;
+        struct pixart_data *data = pmw3610_devs[i]->data;
+        if (config->enable_pm_support && data->ready) {
+            gpio_pin_set_dt(&config->rst_gpio, !enable);
+
+            if (!enable) {
+                LOG_WRN("Powering down sensor ID%d", config->id);
+            } else {
+                LOG_WRN("Powering up sensor ID%d", config->id);
+
+                data->async_init_step = 0;
+                k_work_schedule(&data->init_work, K_MSEC(async_init_delay[0]));
+            }
+        }
+
+        pmw3610_set_performance(pmw3610_devs[i], state_ev->state == ZMK_ACTIVITY_ACTIVE);
 
         if (!enable) {
-            struct pixart_data *data = pmw3610_devs[i]->data;
             data->data_ready = false;
             data->data_index = 0;
         }

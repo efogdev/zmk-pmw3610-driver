@@ -9,6 +9,8 @@ properties:
   irq-gpios:
     type: phandle-array
     required: true
+  rst-gpios:
+    type: phandle-array
   cpi:
     type: int
     default: 600
@@ -25,6 +27,8 @@ properties:
   force-awake:
     type: boolean
   force-high-performance:
+    type: boolean
+  enable-pm-support:
     type: boolean
   xy-swap:
     type: boolean

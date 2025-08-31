@@ -44,6 +44,7 @@ struct pixart_config {
     uint8_t id;
 	struct spi_dt_spec spi;
     struct gpio_dt_spec irq_gpio;
+    struct gpio_dt_spec rst_gpio;
     uint16_t cpi;
     uint8_t evt_type;
     uint8_t x_input_code;
@@ -53,6 +54,7 @@ struct pixart_config {
     bool y_invert;
     bool force_awake;
     bool force_high_performance;
+    bool enable_pm_support;
     uint8_t init_retry_count;
     uint16_t init_retry_interval;
 };
