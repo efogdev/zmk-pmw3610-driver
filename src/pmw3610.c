@@ -255,17 +255,17 @@ static int pmw3610_set_performance(const struct device *dev, const bool enabled)
         //   BIT 2:   POSHI_RUN_RATE 0x0: 8ms; 0x1 4ms;
         //   BIT 1-0: POSLO_RUN_RATE 0x0: 8ms; 0x1 4ms; 0x2 2ms; 0x4 Reserved
         uint8_t perf;
-        if (config->force_high_performance) {
+        if (config->force_high_performance && enabled) {
             perf = 0x0e; // RUN RATE @ 4/2ms
         } else {
-            // reset bit[3..0] to 0x0 (normal operation)
-            perf = value & 0x0F; // RUN RATE @ 8ms
+            perf = 0x00; // RUN RATE @ 8ms
         }
 
-        if (enabled) {
-            perf |= 0xF0; // set bit[3..0] to 0xF (force awake)
-        }
         if (perf != value) {
+            struct pixart_data *data = dev->data;
+            data->data_index = 0;
+            data->data_ready = false;
+
             err = pmw3610_write(dev, PMW3610_REG_PERFORMANCE, perf);
             if (err) {
                 LOG_ERR("Can't write performance register %d", err);
@@ -611,6 +611,11 @@ static int pmw3610_init(const struct device *dev) {
         return err;
     }
 
+    if (config->enable_pm_support && !config->rst_gpio.port) {
+        LOG_ERR("PM support requested but RST GPIO not defined.");
+        return -EINVAL;
+    }
+
     if (config->rst_gpio.port != NULL && config->enable_pm_support) {
         if (gpio_pin_configure_dt(&config->rst_gpio, GPIO_OUTPUT) != 0) {
             LOG_ERR("Failed to configure RST GPIO");
@@ -688,11 +693,19 @@ static const struct sensor_driver_api pmw3610_driver_api = {
 
 #if IS_ENABLED(CONFIG_PM_DEVICE)
 static int pmw3610_pm_action(const struct device *dev, enum pm_device_action action) {
+    const struct pixart_config *config = dev->config;
+
+    if (!config->enable_pm_support || !config->rst_gpio.port) {
+        return 0;
+    }
+
     switch (action) {
     case PM_DEVICE_ACTION_SUSPEND:
-        return pmw3610_set_interrupt(dev, false);
+            gpio_pin_set_dt(&config->rst_gpio, 1);
+            return 0;
     case PM_DEVICE_ACTION_RESUME:
-        return pmw3610_set_interrupt(dev, true);
+            gpio_pin_set_dt(&config->rst_gpio, 0);
+            return 0;
     default:
         return -ENOTSUP;
     }
@@ -735,6 +748,16 @@ static const struct device *pmw3610_devs[] = {
     DT_FOREACH_STATUS_OKAY(pixart_pmw3610, GET_PMW3610_DEV)
 };
 
+static int pmw3610_shutdown(const struct device *dev) {
+    const struct pixart_config *config = dev->config;
+    if (!config->enable_pm_support) {
+        return 1;
+    }
+
+    return pmw3610_write_reg(dev, PMW3610_REG_SHUTDOWN, PMW3610_REG_SHUTDOWN_CMD);
+}
+
+static uint8_t prev_state = 0;
 static int on_activity_state(const zmk_event_t *eh) {
     struct zmk_activity_state_changed *state_ev = as_zmk_activity_state_changed(eh);
 
@@ -743,20 +766,24 @@ static int on_activity_state(const zmk_event_t *eh) {
         return 0;
     }
 
-    const bool enable = state_ev->state != ZMK_ACTIVITY_SLEEP ? 1 : 0;
+    LOG_INF("PM: %d → %d", prev_state, state_ev->state);
+
+    const bool enable = state_ev->state != ZMK_ACTIVITY_SLEEP;
     for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
         const struct pixart_config *config = pmw3610_devs[i]->config;
         struct pixart_data *data = pmw3610_devs[i]->data;
         if (config->enable_pm_support && data->ready) {
-            gpio_pin_set_dt(&config->rst_gpio, !enable);
-
             if (!enable) {
                 LOG_WRN("Powering down sensor ID%d", config->id);
-            } else {
+                if (pmw3610_shutdown(pmw3610_devs[i]) != 0) {
+                    LOG_ERR("Failed to power down sensor ID%d", config->id);
+                }
+            } else if (prev_state == ZMK_ACTIVITY_SLEEP) {
                 LOG_WRN("Powering up sensor ID%d", config->id);
-
                 data->async_init_step = 0;
                 k_work_schedule(&data->init_work, K_MSEC(async_init_delay[0]));
+                prev_state = state_ev->state;
+                return 0;
             }
         }
 
@@ -768,6 +795,7 @@ static int on_activity_state(const zmk_event_t *eh) {
         }
     }
 
+    prev_state = state_ev->state;
     return 0;
 }
 
