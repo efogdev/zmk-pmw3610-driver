@@ -485,7 +485,7 @@ static int pmw3610_report_data(const struct device *dev) {
         (x > CONFIG_PMW3610_ANTI_WARP_THRES || y > CONFIG_PMW3610_ANTI_WARP_THRES) &&
         data->data_ready) {
         data->last_data = now;
-        data->data_index = 0;
+        data->data_index = CONFIG_PMW3610_IGNORE_FIRST_N / 2;
         data->data_ready = false;
         LOG_WRN("Discarded large movement after inactivity, likely warping");
     }
