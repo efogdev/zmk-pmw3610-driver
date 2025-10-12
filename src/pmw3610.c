@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-#define DT_DRV_COMPAT pixart_pmw3610
+#define DT_DRV_COMPAT pixart_pmw3610_efogtech
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/byteorder.h>

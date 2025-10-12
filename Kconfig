@@ -9,7 +9,6 @@ menuconfig PMW3610
   bool "PMW3610 mouse optical sensor"
   select SPI
   depends on INPUT
-  depends on DT_HAS_PIXART_PMW3610_ENABLED
   help
       Enable PMW3610 mouse optical sensor.
 

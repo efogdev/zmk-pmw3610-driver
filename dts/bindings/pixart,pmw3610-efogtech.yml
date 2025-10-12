@@ -1,7 +1,7 @@
 description: |
-  Sensor driver for the pixart PMW3610 mouse sensor 
+  Sensor driver for the pixart PMW3610 mouse sensor, efogtech flavor
 
-compatible: "pixart,pmw3610"
+compatible: "pixart,pmw3610-efogtech"
 
 include: spi-device.yaml
 
