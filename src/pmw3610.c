@@ -691,7 +691,6 @@ static const struct sensor_driver_api pmw3610_driver_api = {
     .attr_set = pmw3610_attr_set,
 };
 
-#if IS_ENABLED(CONFIG_PM_DEVICE)
 static int pmw3610_pm_action(const struct device *dev, enum pm_device_action action) {
     const struct pixart_config *config = dev->config;
 
@@ -699,6 +698,7 @@ static int pmw3610_pm_action(const struct device *dev, enum pm_device_action act
         return 0;
     }
 
+#if IS_ENABLED(CONFIG_PM_DEVICE)
     switch (action) {
     case PM_DEVICE_ACTION_SUSPEND:
             gpio_pin_set_dt(&config->rst_gpio, 1);
@@ -709,38 +709,37 @@ static int pmw3610_pm_action(const struct device *dev, enum pm_device_action act
     default:
         return -ENOTSUP;
     }
+#endif
 }
-#endif // IS_ENABLED(CONFIG_PM_DEVICE)
-PM_DEVICE_DT_INST_DEFINE(n, pmw3610_pm_action);
 
 #define PMW3610_SPI_MODE (SPI_OP_MODE_MASTER | SPI_WORD_SET(8) | SPI_MODE_CPOL | \
                         SPI_MODE_CPHA | SPI_TRANSFER_MSB)
 
-#define PMW3610_DEFINE(n)                                                                          \
-    static struct pixart_data data##n;                                                             \
-    static const struct pixart_config config##n = {                                                \
-        .id = n,                                                                                   \
-		.spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),		                               \
-        .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                           \
-        .rst_gpio = GPIO_DT_SPEC_INST_GET_OR(n, rst_gpios, { .port = NULL }),                      \
-        .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                                       \
-        .evt_type = DT_PROP(DT_DRV_INST(n), evt_type),                                             \
-        .x_input_code = DT_PROP(DT_DRV_INST(n), x_input_code),                                     \
-        .y_input_code = DT_PROP(DT_DRV_INST(n), y_input_code),                                     \
-        .xy_swap = DT_PROP(DT_DRV_INST(n), xy_swap),                                               \
-        .x_invert = DT_PROP(DT_DRV_INST(n), x_invert),                                             \
-        .y_invert = DT_PROP(DT_DRV_INST(n), y_invert),                                             \
-        .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                       \
-        .force_high_performance = DT_PROP(DT_DRV_INST(n), force_high_performance),                 \
-        .enable_pm_support = DT_PROP(DT_DRV_INST(n), enable_pm_support),                           \
-        .init_retry_count = DT_PROP(DT_DRV_INST(n), init_retry_count),                             \
-        .init_retry_interval = DT_PROP(DT_DRV_INST(n), init_retry_interval),                       \
-    };                                                                                             \
-    DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n, POST_KERNEL,                \
+#define PMW3610_DEFINE(n)                                                                               \
+    static struct pixart_data data##n;                                                                  \
+    static const struct pixart_config config##n = {                                                     \
+        .id = n,                                                                                        \
+		.spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),		                                    \
+        .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                                \
+        .rst_gpio = GPIO_DT_SPEC_INST_GET_OR(n, rst_gpios, { .port = NULL }),                           \
+        .cpi = DT_PROP(DT_DRV_INST(n), cpi),                                                            \
+        .evt_type = DT_PROP(DT_DRV_INST(n), evt_type),                                                  \
+        .x_input_code = DT_PROP(DT_DRV_INST(n), x_input_code),                                          \
+        .y_input_code = DT_PROP(DT_DRV_INST(n), y_input_code),                                          \
+        .xy_swap = DT_PROP(DT_DRV_INST(n), xy_swap),                                                    \
+        .x_invert = DT_PROP(DT_DRV_INST(n), x_invert),                                                  \
+        .y_invert = DT_PROP(DT_DRV_INST(n), y_invert),                                                  \
+        .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                            \
+        .force_high_performance = DT_PROP(DT_DRV_INST(n), force_high_performance),                      \
+        .enable_pm_support = DT_PROP(DT_DRV_INST(n), enable_pm_support),                                \
+        .init_retry_count = DT_PROP(DT_DRV_INST(n), init_retry_count),                                  \
+        .init_retry_interval = DT_PROP(DT_DRV_INST(n), init_retry_interval),                            \
+    };                                                                                                  \
+    PM_DEVICE_DT_INST_DEFINE(n, pmw3610_pm_action);                                                     \
+    DEVICE_DT_INST_DEFINE(n, pmw3610_init, PM_DEVICE_DT_INST_GET(n), &data##n, &config##n, POST_KERNEL, \
                           CONFIG_INPUT_PMW3610_INIT_PRIORITY, &pmw3610_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(PMW3610_DEFINE)
-
 
 #define GET_PMW3610_DEV(node_id) DEVICE_DT_GET(node_id),
 
@@ -772,6 +771,9 @@ static int on_activity_state(const zmk_event_t *eh) {
     for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
         const struct pixart_config *config = pmw3610_devs[i]->config;
         struct pixart_data *data = pmw3610_devs[i]->data;
+
+        pmw3610_set_performance(pmw3610_devs[i], state_ev->state == ZMK_ACTIVITY_ACTIVE);
+
         if (config->enable_pm_support && data->ready) {
             if (!enable) {
                 LOG_WRN("Powering down sensor ID%d", config->id);
@@ -786,8 +788,6 @@ static int on_activity_state(const zmk_event_t *eh) {
                 return 0;
             }
         }
-
-        pmw3610_set_performance(pmw3610_devs[i], state_ev->state == ZMK_ACTIVITY_ACTIVE);
 
         if (!enable) {
             data->data_ready = false;
