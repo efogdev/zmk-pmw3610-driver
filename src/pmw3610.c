@@ -311,6 +311,9 @@ static int pmw3610_async_init_check_ob1(const struct device *dev) {
 
     if ((value & 0x0F) != 0x0F) {
         LOG_ERR("Failed self-test (0x%x)", value);
+
+        const struct pixart_config *config = dev->config;
+        LOG_ERR("Sensor ID#%d failed self-test", config->id);
         return -EINVAL;
     }
 
@@ -323,6 +326,9 @@ static int pmw3610_async_init_check_ob1(const struct device *dev) {
 
     if (product_id != PMW3610_PRODUCT_ID) {
         LOG_ERR("Incorrect product id 0x%x (expecting 0x%x)!", product_id, PMW3610_PRODUCT_ID);
+
+        const struct pixart_config *config = dev->config;
+        LOG_ERR("Sensor ID#%d doesn't seem to be connected", config->id);
         return -EIO;
     }
 
@@ -405,13 +411,13 @@ static void pmw3610_async_init(struct k_work *work) {
         if (data->init_retry_attempts > 0) {
             data->init_retry_attempts--;
             data->init_retry_count++;
-            LOG_WRN("PMW3610 retrying initialization (attempt %d/%d)", 
-                    data->init_retry_count, config->init_retry_count);
+            LOG_WRN("PMW3610#%d retrying initialization (attempt %d/%d)",
+                    config->id, data->init_retry_count, config->init_retry_count);
             
             data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
             k_work_schedule(&data->init_work, K_MSEC(config->init_retry_interval));
         } else {
-            LOG_ERR("PMW3610 initialization failed after %d attempts", config->init_retry_count);
+            LOG_ERR("PMW3610#%d initialization failed after %d attempts", config->id, config->init_retry_count);
         }
     } else {
         data->async_init_step++;
