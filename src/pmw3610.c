@@ -390,7 +390,7 @@ static int pmw3610_async_init_configure(const struct device *dev) {
 
 #if IS_ENABLED(CONFIG_PMW3610_SQUAL_LOG)
     k_work_init_delayable(&squal_log_work, pmw3610_log_squal_work);
-    k_work_schedule(&squal_log_work, K_MSEC(CONFIG_PMW3610_SQUAL_LOG_INTERVAL));
+    k_work_schedule(&squal_log_work, K_MSEC(500 + CONFIG_PMW3610_SQUAL_LOG_INTERVAL));
 #endif
 
     return 0;
@@ -750,7 +750,7 @@ DT_INST_FOREACH_STATUS_OKAY(PMW3610_DEFINE)
 #define GET_PMW3610_DEV(node_id) DEVICE_DT_GET(node_id),
 
 static const struct device *pmw3610_devs[] = {
-    DT_FOREACH_STATUS_OKAY(pixart_pmw3610, GET_PMW3610_DEV)
+    DT_FOREACH_STATUS_OKAY(pixart_pmw3610_efogtech, GET_PMW3610_DEV)
 };
 
 static int pmw3610_shutdown(const struct device *dev) {
@@ -810,7 +810,7 @@ static void pmw3610_log_squal_work(struct k_work *work) {
     for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
         const struct device *dev = pmw3610_devs[i];
         const struct pixart_data *data = dev->data;
-        
+
         if (data->ready) {
             uint8_t squal_value;
             const int err = pmw3610_read_reg(dev, PMW3610_REG_SQUAL, &squal_value);
@@ -818,18 +818,18 @@ static void pmw3610_log_squal_work(struct k_work *work) {
 
             if (err == 0) {
                 if (corrected_squal != 0) {
-                    LOG_DBG("idx:%d surface_quality: %d/361", i, corrected_squal);
+                    LOG_DBG("ID#%d surface_quality: %d/361", i, corrected_squal);
                 }
 
                 if (corrected_squal < 50) {
-                    LOG_ERR("idx:%d no surface detected", i);
-                } else if (corrected_squal < 250) {
-                    LOG_WRN("idx:%d check sensor: bad surface quality (%d/361), expect warping", i, corrected_squal);
-                } else if (corrected_squal < 275) {
-                    LOG_WRN("idx:%d surface quality is sub-optimal (%d/361), warping is possible", i, corrected_squal);
+                    LOG_ERR("ID#%d no surface detected", i);
+                } else if (corrected_squal < 240) {
+                    LOG_WRN("ID#%d check sensor: bad surface quality (%d/361), expect warping", i, corrected_squal);
+                } else if (corrected_squal < 260) {
+                    LOG_WRN("ID#%d surface quality is sub-optimal (%d/361), warping is possible", i, corrected_squal);
                 }
             } else {
-                LOG_ERR("idx:%d failed to read SQUAL register: %d", i, err);
+                LOG_ERR("ID#%d failed to read SQUAL register: %d", i, err);
             }
         }
     }
