@@ -254,11 +254,13 @@ static int pmw3610_set_performance(const struct device *dev, const bool enabled)
         //   BIT 3:   VEL_RUNRATE    0x0: 8ms; 0x1 4ms;
         //   BIT 2:   POSHI_RUN_RATE 0x0: 8ms; 0x1 4ms;
         //   BIT 1-0: POSLO_RUN_RATE 0x0: 8ms; 0x1 4ms; 0x2 2ms; 0x4 Reserved
-        uint8_t perf;
-        if (config->force_high_performance && enabled) {
-            perf = 0x0e; // RUN RATE @ 4/2ms
+        uint8_t perf = 0;
+        if (config->force_high_performance) {
+            perf = enabled
+                ? 0x0e // RUN RATE @ 4/2ms
+                : 0x00;// RUN RATE @ 8ms
         } else {
-            perf = 0x00; // RUN RATE @ 8ms
+            perf = 0;
         }
 
         if (perf != value) {
@@ -281,8 +283,7 @@ static int pmw3610_set_performance(const struct device *dev, const bool enabled)
 
 static int pmw3610_set_interrupt(const struct device *dev, const bool en) {
     const struct pixart_config *config = dev->config;
-    const int ret = gpio_pin_interrupt_configure_dt(&config->irq_gpio,
-                                              en ? GPIO_INT_LEVEL_ACTIVE : GPIO_INT_DISABLE);
+    const int ret = gpio_pin_interrupt_configure_dt(&config->irq_gpio, en ? GPIO_INT_LEVEL_ACTIVE : GPIO_INT_DISABLE);
     if (ret < 0) {
         LOG_ERR("can't set interrupt");
     }
@@ -592,9 +593,8 @@ static int pmw3610_init_irq(const struct device *dev) {
 static int pmw3610_init(const struct device *dev) {
     struct pixart_data *data = dev->data;
     const struct pixart_config *config = dev->config;
-    int err;
 
-	if (!spi_is_ready_dt(&config->spi)) {
+    if (!spi_is_ready_dt(&config->spi)) {
 		LOG_ERR("%s is not ready", config->spi.bus->name);
 		return -ENODEV;
 	}
@@ -612,7 +612,7 @@ static int pmw3610_init(const struct device *dev) {
     k_work_init(&data->trigger_work, pmw3610_work_callback);
 
     // init irq routine
-    err = pmw3610_init_irq(dev);
+    const int err = pmw3610_init_irq(dev);
     if (err) {
         return err;
     }
@@ -636,9 +636,7 @@ static int pmw3610_init(const struct device *dev) {
     // 3. other configs like cpi, downshift time, sample time etc.
     // The sensor is ready to work (i.e., data->ready=true after the above steps are finished)
     k_work_init_delayable(&data->init_work, pmw3610_async_init);
-
     k_work_schedule(&data->init_work, K_MSEC(async_init_delay[data->async_init_step]));
-
     return err;
 }
 
@@ -706,12 +704,11 @@ static int pmw3610_pm_action(const struct device *dev, enum pm_device_action act
 
 #if IS_ENABLED(CONFIG_PM_DEVICE)
     switch (action) {
-    case PM_DEVICE_ACTION_SUSPEND:
-            gpio_pin_set_dt(&config->rst_gpio, 1);
-            return 0;
     case PM_DEVICE_ACTION_RESUME:
-            gpio_pin_set_dt(&config->rst_gpio, 0);
-            return 0;
+        gpio_pin_set_dt(&config->rst_gpio, 1);
+        k_sleep(K_MSEC(1));
+        gpio_pin_set_dt(&config->rst_gpio, 0);
+        return 0;
     default:
         return -ENOTSUP;
     }
@@ -771,22 +768,23 @@ static int on_activity_state(const zmk_event_t *eh) {
         return 0;
     }
 
-    LOG_INF("PM: %d → %d", prev_state, state_ev->state);
+    LOG_DBG("PM: %d → %d", prev_state, state_ev->state);
 
-    const bool enable = state_ev->state != ZMK_ACTIVITY_SLEEP;
+    const bool enable = state_ev->state == ZMK_ACTIVITY_ACTIVE;
     for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
         const struct pixart_config *config = pmw3610_devs[i]->config;
         struct pixart_data *data = pmw3610_devs[i]->data;
 
         pmw3610_set_performance(pmw3610_devs[i], state_ev->state == ZMK_ACTIVITY_ACTIVE);
-
         if (config->enable_pm_support && data->ready) {
+            pmw3610_set_interrupt(pmw3610_devs[i], enable);
+
             if (!enable) {
                 LOG_WRN("Powering down sensor ID%d", config->id);
                 if (pmw3610_shutdown(pmw3610_devs[i]) != 0) {
                     LOG_ERR("Failed to power down sensor ID%d", config->id);
                 }
-            } else if (prev_state == ZMK_ACTIVITY_SLEEP) {
+            } else if (prev_state != ZMK_ACTIVITY_ACTIVE) {
                 LOG_WRN("Powering up sensor ID%d", config->id);
                 data->async_init_step = 0;
                 k_work_schedule(&data->init_work, K_MSEC(async_init_delay[0]));
