@@ -821,9 +821,9 @@ static void pmw3610_log_squal_work(struct k_work *work) {
 
                 if (corrected_squal < 50) {
                     LOG_ERR("ID#%d no surface detected", i);
-                } else if (corrected_squal < 225) {
+                } else if (corrected_squal < 210) {
                     LOG_WRN("ID#%d check sensor: bad surface quality (%d/361), expect warping", i, corrected_squal);
-                } else if (corrected_squal < 245) {
+                } else if (corrected_squal < 230) {
                     LOG_WRN("ID#%d surface quality is sub-optimal (%d/361), warping is possible", i, corrected_squal);
                 }
             } else {
