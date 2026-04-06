@@ -14,6 +14,10 @@
 #include <zmk/events/activity_state_changed.h>
 #include "pmw3610.h"
 
+#if IS_ENABLED(CONFIG_ZMK_ADAPTIVE_FEEDBACK)
+#include <zmk_adaptive_feedback/adaptive_feedback.h>
+#endif
+
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(pmw3610, CONFIG_PMW3610_LOG_LEVEL);
 
@@ -412,12 +416,23 @@ static void pmw3610_async_init(struct k_work *work) {
         if (data->init_retry_attempts > 0) {
             data->init_retry_attempts--;
             data->init_retry_count++;
-            LOG_WRN("PMW3610#%d retrying initialization (attempt %d/%d)",
-                    config->id, data->init_retry_count, config->init_retry_count);
+            LOG_WRN("PMW3610#%d retrying initialization (attempt %d/%d)", config->id, data->init_retry_count, config->init_retry_count);
             
+#if IS_ENABLED(CONFIG_ZMK_ADAPTIVE_FEEDBACK)
+            if (data->init_retry_count >= CONFIG_PMW3610_INIT_FAILURE_THRESHOLD && CONFIG_PMW3610_INIT_FAILURE_THRESHOLD > 0 && !data->error_triggered) {
+                zaf_error_trigger(config->id);
+                data->error_triggered = true;
+            }
+#endif
+
             data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
             k_work_schedule(&data->init_work, K_MSEC(config->init_retry_interval));
         } else {
+            if (!data->error_triggered) {
+                zaf_error_trigger(config->id);
+                data->error_triggered = true;
+            }
+
             LOG_ERR("PMW3610#%d initialization failed after %d attempts", config->id, config->init_retry_count);
         }
     } else {
@@ -425,6 +440,11 @@ static void pmw3610_async_init(struct k_work *work) {
 
         if (data->async_init_step == ASYNC_INIT_STEP_COUNT) {
             data->ready = true; 
+
+#if IS_ENABLED(CONFIG_ZMK_ADAPTIVE_FEEDBACK)
+            zaf_error_clear(config->id);
+#endif
+
             LOG_INF("PMW3610 initialized successfully");
             if (data->init_retry_count > 0) {
                 LOG_INF("PMW3610 initialization succeeded after %d retries", data->init_retry_count);
@@ -604,7 +624,6 @@ static int pmw3610_init(const struct device *dev) {
 
     // init smart algorithm flag;
     data->sw_smart_flag = false;
-
     data->init_retry_count = 0;
     data->init_retry_attempts = config->init_retry_count;
 

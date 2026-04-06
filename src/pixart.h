@@ -28,7 +28,7 @@ struct pixart_data {
     int                          init_retry_count; // current retry count
     int                          init_retry_attempts; // remaining retry attempts
 
-    bool                         ready; // whether init is finished successfully
+    bool                         ready, error_triggered;
     int                          err; // error code during async init
 
     bool                         data_ready;
