@@ -428,10 +428,12 @@ static void pmw3610_async_init(struct k_work *work) {
             data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
             k_work_schedule(&data->init_work, K_MSEC(config->init_retry_interval));
         } else {
+#if IS_ENABLED(CONFIG_ZMK_ADAPTIVE_FEEDBACK)
             if (!data->error_triggered) {
                 zaf_error_trigger(config->id);
                 data->error_triggered = true;
             }
+#endif
 
             LOG_ERR("PMW3610#%d initialization failed after %d attempts", config->id, config->init_retry_count);
         }
