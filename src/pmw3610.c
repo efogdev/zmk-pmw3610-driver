@@ -419,6 +419,7 @@ static void pmw3610_async_init(struct k_work *work) {
             LOG_WRN("PMW3610#%d retrying initialization (attempt %d/%d)", config->id, data->init_retry_count, config->init_retry_count);
             
 #if IS_ENABLED(CONFIG_ZMK_ADAPTIVE_FEEDBACK)
+            // ReSharper disable once CppRedundantBooleanExpressionArgument
             if (data->init_retry_count >= CONFIG_PMW3610_INIT_FAILURE_THRESHOLD && CONFIG_PMW3610_INIT_FAILURE_THRESHOLD > 0 && !data->error_triggered) {
                 zaf_error_trigger(config->id);
                 data->error_triggered = true;
@@ -473,9 +474,6 @@ static int pmw3610_report_data(const struct device *dev) {
     }
 
     uint8_t buf[PMW3610_BURST_SIZE];
-    static int64_t dx = 0;
-    static int64_t dy = 0;
-
 	const int err = pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_BURST_SIZE);
     if (err) {
         return err;
@@ -545,18 +543,18 @@ static int pmw3610_report_data(const struct device *dev) {
     }
 
     // accumulate delta until report in next iteration
-    dx += x;
-    dy += y;
+    data->dx += x;
+    data->dy += y;
 
     // fetch report value
-    const int16_t rx = (int16_t)CLAMP(dx, INT16_MIN, INT16_MAX);
-    const int16_t ry = (int16_t)CLAMP(dy, INT16_MIN, INT16_MAX);
+    const int16_t rx = (int16_t)CLAMP(data->dx, INT16_MIN, INT16_MAX);
+    const int16_t ry = (int16_t)CLAMP(data->dy, INT16_MIN, INT16_MAX);
     const bool have_x = rx != 0;
     const bool have_y = ry != 0;
 
     if (have_x || have_y) {
-        dx = 0;
-        dy = 0;
+        data->dx = 0;
+        data->dy = 0;
         if (have_x) {
             input_report(dev, config->evt_type, config->x_input_code, rx, !have_y, K_NO_WAIT);
         }
@@ -621,13 +619,12 @@ static int pmw3610_init(const struct device *dev) {
 		return -ENODEV;
 	}
 
-    // init device pointer
     data->dev = dev;
-
-    // init smart algorithm flag;
     data->sw_smart_flag = false;
+
     data->init_retry_count = 0;
     data->init_retry_attempts = config->init_retry_count;
+    data->dx = data->dy = 0;
 
     // init trigger handler work
     k_work_init(&data->trigger_work, pmw3610_work_callback);
@@ -716,7 +713,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
     .attr_set = pmw3610_attr_set,
 };
 
-static int pmw3610_pm_action(const struct device *dev, enum pm_device_action action) {
+static int pmw3610_pm_action(const struct device *dev, const enum pm_device_action action) {
     const struct pixart_config *config = dev->config;
 
     if (!config->enable_pm_support || !config->rst_gpio.port) {
@@ -727,7 +724,7 @@ static int pmw3610_pm_action(const struct device *dev, enum pm_device_action act
     switch (action) {
     case PM_DEVICE_ACTION_RESUME:
         gpio_pin_set_dt(&config->rst_gpio, 1);
-        k_sleep(K_MSEC(1));
+        k_sleep(K_MSEC(1)); 
         gpio_pin_set_dt(&config->rst_gpio, 0);
         return 0;
     default:
