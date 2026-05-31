@@ -26,6 +26,19 @@ static struct k_work_delayable squal_log_work;
 static void pmw3610_log_squal_work(struct k_work *work);
 #endif
 
+#if IS_ENABLED(CONFIG_SHELL)
+#include <zephyr/shell/shell.h>
+
+struct pmw3610_squal_accum {
+    bool active;
+    uint16_t min;
+    uint16_t max;
+    uint32_t sum;
+    uint32_t count;
+};
+static void pmw3610_squal_accum_sample(uint8_t id, uint8_t raw);
+#endif
+
 //////// Sensor initialization steps definition //////////
 // init is done in non-blocking manner (i.e., async), a //
 // delayable work is defined for this purpose           //
@@ -464,8 +477,8 @@ static int pmw3610_report_data(const struct device *dev) {
     const struct pixart_config *config = dev->config;
 
 #if IS_ENABLED(CONFIG_PMW3610_IGNORE_AFTER_REST) || IS_ENABLED(CONFIG_PMW3610_ANTI_WARP)
-    const int64_t now = k_uptime_get();
-    const int64_t passed = now - data->last_data;
+    const uint32_t now = k_uptime_get_32();
+    const uint32_t passed = now - data->last_data;
 #endif
 
     if (unlikely(!data->ready)) {
@@ -479,6 +492,10 @@ static int pmw3610_report_data(const struct device *dev) {
         return err;
     }
     // LOG_HEXDUMP_DBG(buf, PMW3610_BURST_SIZE, "buf");
+
+#if IS_ENABLED(CONFIG_SHELL)
+    pmw3610_squal_accum_sample(config->id, buf[4]);
+#endif
 
     // 12-bit two's complement value to int16_t
 // adapted from https://stackoverflow.com/questions/70802306/convert-a-12-bit-signed-number-in-c
@@ -635,12 +652,7 @@ static int pmw3610_init(const struct device *dev) {
         return err;
     }
 
-    if (config->enable_pm_support && !config->rst_gpio.port) {
-        LOG_ERR("PM support requested but RST GPIO not defined.");
-        return -EINVAL;
-    }
-
-    if (config->rst_gpio.port != NULL && config->enable_pm_support) {
+    if (config->rst_gpio.port != NULL) {
         if (gpio_pin_configure_dt(&config->rst_gpio, GPIO_OUTPUT) != 0) {
             LOG_ERR("Failed to configure RST GPIO");
         } else {
@@ -655,6 +667,13 @@ static int pmw3610_init(const struct device *dev) {
     // The sensor is ready to work (i.e., data->ready=true after the above steps are finished)
     k_work_init_delayable(&data->init_work, pmw3610_async_init);
     k_work_schedule(&data->init_work, K_MSEC(async_init_delay[data->async_init_step]));
+
+#if IS_ENABLED(CONFIG_PM_DEVICE)
+    if (pm_device_wakeup_is_capable(dev)) {
+        pm_device_wakeup_enable(dev, true);
+    }
+#endif
+
     return err;
 }
 
@@ -713,25 +732,41 @@ static const struct sensor_driver_api pmw3610_driver_api = {
     .attr_set = pmw3610_attr_set,
 };
 
+#if IS_ENABLED(CONFIG_PM_DEVICE)
+static int pmw3610_shutdown(const struct device *dev);
+
 static int pmw3610_pm_action(const struct device *dev, const enum pm_device_action action) {
     const struct pixart_config *config = dev->config;
+    struct pixart_data *data = dev->data;
 
-    if (!config->enable_pm_support || !config->rst_gpio.port) {
-        return 0;
-    }
-
-#if IS_ENABLED(CONFIG_PM_DEVICE)
     switch (action) {
+    case PM_DEVICE_ACTION_SUSPEND: {
+        if (pm_device_wakeup_is_enabled(dev)) {
+            return 0;
+        }
+        const int ret = pmw3610_set_interrupt(dev, false);
+        if (ret < 0) {
+            return ret;
+        }
+        data->ready = false;
+        return pmw3610_shutdown(dev);
+    }
     case PM_DEVICE_ACTION_RESUME:
-        gpio_pin_set_dt(&config->rst_gpio, 1);
-        k_sleep(K_MSEC(1)); 
-        gpio_pin_set_dt(&config->rst_gpio, 0);
-        return 0;
+        if (config->rst_gpio.port) {
+            gpio_pin_set_dt(&config->rst_gpio, 1);
+            k_sleep(K_MSEC(1));
+            gpio_pin_set_dt(&config->rst_gpio, 0);
+        }
+        data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
+        data->init_retry_count = 0;
+        data->init_retry_attempts = config->init_retry_count;
+        return k_work_schedule(&data->init_work,
+                               K_MSEC(async_init_delay[ASYNC_INIT_STEP_POWER_UP])) < 0 ? -EIO : 0;
     default:
         return -ENOTSUP;
     }
-#endif
 }
+#endif
 
 #define PMW3610_SPI_MODE (SPI_OP_MODE_MASTER | SPI_WORD_SET(8) | SPI_MODE_CPOL | \
                         SPI_MODE_CPHA | SPI_TRANSFER_MSB)
@@ -752,7 +787,6 @@ static int pmw3610_pm_action(const struct device *dev, const enum pm_device_acti
         .y_invert = DT_PROP(DT_DRV_INST(n), y_invert),                                                  \
         .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                            \
         .force_high_performance = DT_PROP(DT_DRV_INST(n), force_high_performance),                      \
-        .enable_pm_support = DT_PROP(DT_DRV_INST(n), enable_pm_support),                                \
         .init_retry_count = DT_PROP(DT_DRV_INST(n), init_retry_count),                                  \
         .init_retry_interval = DT_PROP(DT_DRV_INST(n), init_retry_interval),                            \
     };                                                                                                  \
@@ -769,11 +803,6 @@ static const struct device *pmw3610_devs[] = {
 };
 
 static int pmw3610_shutdown(const struct device *dev) {
-    const struct pixart_config *config = dev->config;
-    if (!config->enable_pm_support) {
-        return 1;
-    }
-
     return pmw3610_write_reg(dev, PMW3610_REG_SHUTDOWN, PMW3610_REG_SHUTDOWN_CMD);
 }
 
@@ -790,19 +819,25 @@ static int on_activity_state(const zmk_event_t *eh) {
 
     const bool enable = state_ev->state == ZMK_ACTIVITY_ACTIVE;
     for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
-        const struct pixart_config *config = pmw3610_devs[i]->config;
-        struct pixart_data *data = pmw3610_devs[i]->data;
+        const struct device *dev = pmw3610_devs[i];
+        const struct pixart_config *config = dev->config;
+        struct pixart_data *data = dev->data;
 
-        pmw3610_set_performance(pmw3610_devs[i], state_ev->state == ZMK_ACTIVITY_ACTIVE);
-        if (config->enable_pm_support && data->ready) {
-            pmw3610_set_interrupt(pmw3610_devs[i], enable);
+        bool wakeup = false;
+#if IS_ENABLED(CONFIG_PM_DEVICE)
+        wakeup = pm_device_wakeup_is_enabled(dev);
+#endif
 
-            if (!enable) {
+        pmw3610_set_performance(dev, enable);
+        if (data->ready) {
+            pmw3610_set_interrupt(dev, enable || wakeup);
+
+            if (!enable && !wakeup) {
                 LOG_WRN("Powering down sensor ID%d", config->id);
-                if (pmw3610_shutdown(pmw3610_devs[i]) != 0) {
+                if (pmw3610_shutdown(dev) != 0) {
                     LOG_ERR("Failed to power down sensor ID%d", config->id);
                 }
-            } else if (prev_state != ZMK_ACTIVITY_ACTIVE) {
+            } else if (enable && prev_state != ZMK_ACTIVITY_ACTIVE && !wakeup) {
                 LOG_WRN("Powering up sensor ID%d", config->id);
                 data->async_init_step = 0;
                 k_work_schedule(&data->init_work, K_MSEC(async_init_delay[0]));
@@ -856,3 +891,101 @@ static void pmw3610_log_squal_work(struct k_work *work) {
 
 ZMK_LISTENER(zmk_pmw3610_idle_sleeper, on_activity_state);
 ZMK_SUBSCRIPTION(zmk_pmw3610_idle_sleeper, zmk_activity_state_changed);
+
+#if IS_ENABLED(CONFIG_SHELL)
+static struct pmw3610_squal_accum squal_accum[ARRAY_SIZE(pmw3610_devs)];
+static struct k_spinlock squal_accum_lock;
+
+static void pmw3610_squal_accum_sample(const uint8_t id, const uint8_t raw) {
+    if (id >= ARRAY_SIZE(squal_accum)) {
+        return;
+    }
+    struct pmw3610_squal_accum *a = &squal_accum[id];
+    if (!a->active) {
+        return;
+    }
+    const uint16_t corrected = ((uint16_t) raw) << 1;
+    const k_spinlock_key_t key = k_spin_lock(&squal_accum_lock);
+    if (a->active) {
+        if (a->count == 0 || corrected < a->min) {
+            a->min = corrected;
+        }
+        if (a->count == 0 || corrected > a->max) {
+            a->max = corrected;
+        }
+        a->sum += corrected;
+        a->count++;
+    }
+    k_spin_unlock(&squal_accum_lock, key);
+}
+
+static int cmd_sensor_surface(const struct shell *sh, const size_t argc, char **argv) {
+    if (argc == 1) {
+        for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
+            const struct device *dev = pmw3610_devs[i];
+            const struct pixart_config *config = dev->config;
+            const struct pixart_data *data = dev->data;
+            if (!data->ready) {
+                shell_print(sh, "Sensor #%u: not ready", config->id);
+                continue;
+            }
+            uint8_t raw;
+            const int err = pmw3610_read_reg(dev, PMW3610_REG_SQUAL, &raw);
+            if (err) {
+                shell_error(sh, "Sensor #%u: read failed (error %d)", config->id, err);
+                continue;
+            }
+            const uint16_t corrected = ((uint16_t) raw) << 1;
+            shell_print(sh, "Sensor #%u: surface quality = %u/361", config->id, corrected);
+        }
+        return 0;
+    }
+
+    if (argc == 3 && strcmp(argv[1], "--accum-ms") == 0) {
+        char *end;
+        const unsigned long ms = strtoul(argv[2], &end, 10);
+        if (*end != '\0' || ms == 0 || ms > 60000) {
+            shell_error(sh, "Invalid duration: %s (1..60000 ms)", argv[2]);
+            return -EINVAL;
+        }
+
+        k_spinlock_key_t key = k_spin_lock(&squal_accum_lock);
+        for (size_t i = 0; i < ARRAY_SIZE(squal_accum); i++) {
+            squal_accum[i] = (struct pmw3610_squal_accum){ .active = true };
+        }
+        k_spin_unlock(&squal_accum_lock, key);
+        k_msleep((int32_t) ms);
+
+        struct pmw3610_squal_accum snapshot[ARRAY_SIZE(squal_accum)];
+        key = k_spin_lock(&squal_accum_lock);
+        for (size_t i = 0; i < ARRAY_SIZE(squal_accum); i++) {
+            squal_accum[i].active = false;
+            snapshot[i] = squal_accum[i];
+        }
+        k_spin_unlock(&squal_accum_lock, key);
+
+        for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
+            const struct pixart_config *config = pmw3610_devs[i]->config;
+            const struct pmw3610_squal_accum *a = &snapshot[i];
+            if (a->count == 0) {
+                shell_print(sh, "Sensor #%u: no samples (move pointer during the test)", config->id);
+                continue;
+            }
+            const uint32_t avg = a->sum / a->count;
+            shell_print(sh, "Sensor #%u: %u/%u/%u of 361 (min/max/avg) over %u samples",
+                        config->id, a->min, a->max, avg, a->count);
+        }
+        return 0;
+    }
+
+    shell_error(sh, "usage: sensor surface [--accum-ms N]");
+    return -EINVAL;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_sensor,
+    SHELL_CMD_ARG(surface, NULL, "Read surface quality. Usage: surface [--accum-ms N]", cmd_sensor_surface, 1, 2),
+    SHELL_SUBCMD_SET_END
+);
+SHELL_CMD_REGISTER(sensor, &sub_sensor, "Sensor diagnostics", NULL);
+
+#endif

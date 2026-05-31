@@ -24,9 +24,9 @@ struct pixart_data {
     struct k_work                trigger_work; // realtrigger job
 
     struct k_work_delayable      init_work; // the work structure for delayable init steps
-    int                          async_init_step;
-    int                          init_retry_count; // current retry count
-    int                          init_retry_attempts; // remaining retry attempts
+    uint8_t                      async_init_step;
+    uint8_t                      init_retry_count; // current retry count
+    uint8_t                      init_retry_attempts; // remaining retry attempts
 
     bool                         ready, error_triggered;
     int                          err; // error code during async init
@@ -36,7 +36,7 @@ struct pixart_data {
     int64_t                      dx, dy;
 
 #if IS_ENABLED(CONFIG_PMW3610_IGNORE_AFTER_REST) || IS_ENABLED(CONFIG_PMW3610_ANTI_WARP)
-    uint64_t                     last_data;
+    uint32_t                     last_data;
 #endif
 };
 
@@ -55,7 +55,6 @@ struct pixart_config {
     bool y_invert;
     bool force_awake;
     bool force_high_performance;
-    bool enable_pm_support;
     uint8_t init_retry_count;
     uint16_t init_retry_interval;
 };

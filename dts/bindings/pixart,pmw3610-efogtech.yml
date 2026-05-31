@@ -28,8 +28,6 @@ properties:
     type: boolean
   force-high-performance:
     type: boolean
-  enable-pm-support:
-    type: boolean
   xy-swap:
     type: boolean
   x-invert:
