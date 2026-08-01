@@ -77,7 +77,7 @@ extern "C" {
 #define PMW3610_PERF_FRAME_CAPTURE 0xF1
 #define PMW3610_TEST_CLOCK_CMD_ON 0x10
 #define PMW3610_FRAME_GRAB_CMD 0x80
-#define PMW3610_FRAME_GRAB_DELAY_MS 8
+#define PMW3610_FRAME_GRAB_DELAY_MS 10
 
 /* Pixel array dimensions of a single captured frame */
 #define PMW3610_FRAME_DIM 22

@@ -123,10 +123,7 @@ static int pmw3610_write(const struct device *dev, const uint8_t reg, const uint
 
 #if IS_ENABLED(CONFIG_SHELL)
 static int pmw3610_frame_capture(const struct device *dev, uint8_t *buf) {
-    int err = pmw3610_write_reg(dev, PMW3610_REG_PERFORMANCE, PMW3610_PERF_FRAME_CAPTURE);
-    if (!err) {
-        err = pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_ENABLE);
-    }
+    int err = pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_ENABLE);
     if (err) {
         return err;
     }
@@ -1103,6 +1100,10 @@ static int pmw3610_stream_start(const struct shell *sh) {
         }
 
         pmw3610_set_interrupt(dev, false);
+        pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_ENABLE);
+        pmw3610_write_reg(dev, PMW3610_REG_PERFORMANCE, PMW3610_PERF_FRAME_CAPTURE);
+        pmw3610_write_reg(dev, PMW3610_REG_TEST_CLOCK, PMW3610_TEST_CLOCK_CMD_ON);
+        pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_DISABLE);
         data->streaming = true;
         data->ready = false;
 
