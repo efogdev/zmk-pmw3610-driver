@@ -39,6 +39,10 @@ struct pmw3610_squal_accum {
 static void pmw3610_squal_accum_sample(uint8_t id, uint8_t raw);
 #endif
 
+#if IS_ENABLED(CONFIG_SHELL)
+#include <stdlib.h>
+#endif
+
 //////// Sensor initialization steps definition //////////
 // init is done in non-blocking manner (i.e., async), a //
 // delayable work is defined for this purpose           //
@@ -80,7 +84,7 @@ static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(const struct device *de
 
 //////// Function definitions //////////
 
-static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value, const uint8_t len) {
+static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value, const size_t len) {
 	const struct pixart_config *cfg = dev->config;
 	const struct spi_buf tx_buf = { .buf = &addr, .len = sizeof(addr) };
 	const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
@@ -116,6 +120,31 @@ static int pmw3610_write(const struct device *dev, const uint8_t reg, const uint
     pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_DISABLE);
     return 0;
 }
+
+#if IS_ENABLED(CONFIG_SHELL)
+static int pmw3610_frame_capture(const struct device *dev, uint8_t *buf) {
+    int err = pmw3610_write_reg(dev, PMW3610_REG_PERFORMANCE, PMW3610_PERF_FRAME_CAPTURE);
+    if (!err) {
+        err = pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_ENABLE);
+    }
+    if (err) {
+        return err;
+    }
+
+    k_sleep(K_USEC(T_CLOCK_ON_DELAY_US));
+
+    err = pmw3610_write_reg(dev, PMW3610_REG_TEST_CLOCK, PMW3610_TEST_CLOCK_CMD_ON);
+    if (!err) {
+        err = pmw3610_write_reg(dev, PMW3610_REG_FRAME_GRAB, PMW3610_FRAME_GRAB_CMD);
+    }
+    if (err) {
+        return err;
+    }
+
+    k_sleep(K_MSEC(PMW3610_FRAME_GRAB_DELAY_MS));
+    return pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_FRAME_SIZE);
+}
+#endif
 
 static int pmw3610_set_cpi(const struct device *dev, const uint32_t cpi) {
     /* Set resolution with CPI step of 200 cpi
@@ -481,6 +510,12 @@ static int pmw3610_report_data(const struct device *dev) {
     const uint32_t passed = now - data->last_data;
 #endif
 
+#if IS_ENABLED(CONFIG_SHELL)
+    if (unlikely(data->streaming)) {
+        return 0;
+    }
+#endif
+
     if (unlikely(!data->ready)) {
         LOG_WRN("Device is not initialized yet");
         return -EBUSY;
@@ -823,6 +858,12 @@ static int on_activity_state(const zmk_event_t *eh) {
         const struct pixart_config *config = dev->config;
         struct pixart_data *data = dev->data;
 
+#if IS_ENABLED(CONFIG_SHELL)
+        if (data->streaming) {
+            continue;
+        }
+#endif
+
         bool wakeup = false;
 #if IS_ENABLED(CONFIG_PM_DEVICE)
         wakeup = pm_device_wakeup_is_enabled(dev);
@@ -982,8 +1023,171 @@ static int cmd_sensor_surface(const struct shell *sh, const size_t argc, char **
     return -EINVAL;
 }
 
+#define PMW3610_STREAM_TEXT_SIZE (PMW3610_FRAME_DIM * (PMW3610_FRAME_DIM * 2 + 1) + 32)
+
+static K_THREAD_STACK_DEFINE(stream_stack, CONFIG_PMW3610_STREAM_STACK_SIZE);
+static struct k_thread stream_thread;
+static const struct shell *stream_sh;
+static uint8_t *stream_buf; // frame bytes followed by the text buffer, allocated on stream start
+static volatile bool stream_active;
+
+static void pmw3610_stream_emit(const uint8_t id, const uint32_t seq, const uint8_t *frame,
+                                char *text) {
+    static const char hex[] = "0123456789ABCDEF";
+    char *p = text + snprintk(text, 32, "F %u %08u\n", id, seq);
+
+    for (size_t row = 0; row < PMW3610_FRAME_DIM; row++) {
+        const uint8_t *pixels = &frame[row * PMW3610_FRAME_DIM];
+        for (size_t col = 0; col < PMW3610_FRAME_DIM; col++) {
+            *p++ = hex[pixels[col] >> 4];
+            *p++ = hex[pixels[col] & 0x0F];
+        }
+        *p++ = '\n';
+    }
+    *p = '\0';
+
+    shell_fprintf(stream_sh, SHELL_NORMAL, "%sEND\n", text);
+}
+
+static void pmw3610_stream_thread_fn(void *p1, void *p2, void *p3) {
+    ARG_UNUSED(p1);
+    ARG_UNUSED(p2);
+    ARG_UNUSED(p3);
+
+    uint8_t *frame = stream_buf;
+    char *text = (char *)(stream_buf + PMW3610_FRAME_SIZE);
+    uint32_t seq = 0;
+
+    while (stream_active) {
+        for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs) && stream_active; i++) {
+            const struct device *dev = pmw3610_devs[i];
+            const struct pixart_config *config = dev->config;
+            const struct pixart_data *data = dev->data;
+
+            if (!data->streaming) {
+                continue;
+            }
+
+            const int err = pmw3610_frame_capture(dev, frame);
+            if (err) {
+                shell_fprintf(stream_sh, SHELL_ERROR, "E %u %d\n", config->id, err);
+                k_msleep(10);
+                continue;
+            }
+
+            pmw3610_write_reg(dev, PMW3610_REG_SPI_CLK_ON_REQ, PMW3610_SPI_CLOCK_CMD_DISABLE);
+            pmw3610_stream_emit(config->id, ++seq, frame, text);
+        }
+    }
+}
+
+static int pmw3610_stream_start(const struct shell *sh) {
+    if (stream_active) {
+        return -EALREADY;
+    }
+
+    stream_buf = malloc(PMW3610_FRAME_SIZE + PMW3610_STREAM_TEXT_SIZE);
+    if (stream_buf == NULL) {
+        LOG_ERR("Cannot allocate buffer!");
+        return -ENOMEM;
+    }
+
+    size_t count = 0;
+    for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
+        const struct device *dev = pmw3610_devs[i];
+        const struct pixart_config *config = dev->config;
+        struct pixart_data *data = dev->data;
+
+        if (!data->ready) {
+            continue;
+        }
+
+        pmw3610_set_interrupt(dev, false);
+        data->streaming = true;
+        data->ready = false;
+
+        struct k_work_sync sync;
+        k_work_flush(&data->trigger_work, &sync);
+        count++;
+    }
+
+    if (count == 0) {
+        free(stream_buf);
+        stream_buf = NULL;
+        return -ENODEV;
+    }
+
+    stream_sh = sh;
+    stream_active = true;
+    k_thread_create(&stream_thread, stream_stack, K_THREAD_STACK_SIZEOF(stream_stack),
+        pmw3610_stream_thread_fn, NULL, NULL, NULL, K_LOWEST_APPLICATION_THREAD_PRIO, 0, K_NO_WAIT);
+    k_thread_name_set(&stream_thread, "pmw3610_stream");
+    return 0;
+}
+
+static int pmw3610_stream_stop(const struct shell *sh) {
+    if (!stream_active) {
+        shell_error(sh, "Stream is not active");
+        return -EALREADY;
+    }
+
+    stream_active = false;
+    k_thread_join(&stream_thread, K_FOREVER);
+    free(stream_buf);
+    stream_buf = NULL;
+    stream_sh = NULL;
+
+    for (size_t i = 0; i < ARRAY_SIZE(pmw3610_devs); i++) {
+        const struct device *dev = pmw3610_devs[i];
+        const struct pixart_config *config = dev->config;
+        struct pixart_data *data = dev->data;
+
+        if (!data->streaming) {
+            continue;
+        }
+
+        data->streaming = false;
+        data->data_ready = false;
+        data->data_index = 0;
+        data->dx = data->dy = 0;
+
+        if (config->rst_gpio.port) {
+            gpio_pin_set_dt(&config->rst_gpio, 1);
+            k_sleep(K_MSEC(1));
+            gpio_pin_set_dt(&config->rst_gpio, 0);
+        }
+
+        data->async_init_step = ASYNC_INIT_STEP_POWER_UP;
+        data->init_retry_count = 0;
+        data->init_retry_attempts = config->init_retry_count;
+        k_work_schedule(&data->init_work, K_MSEC(async_init_delay[ASYNC_INIT_STEP_POWER_UP]));
+        shell_print(sh, "Sensor #%u: reinitializing", config->id);
+    }
+
+    return 0;
+}
+
+static int cmd_sensor_stream(const struct shell *sh, const size_t argc, char **argv) {
+    if (argc == 1) {
+        shell_error(sh, "usage: sensor stream [--on|--off]");
+        return -EINVAL;
+    }
+
+    if (strcmp(argv[1], "--on") == 0) {
+        return pmw3610_stream_start(sh);
+    }
+
+    if (strcmp(argv[1], "--off") == 0) {
+        return pmw3610_stream_stop(sh);
+    }
+
+    shell_error(sh, "usage: sensor stream [--on|--off]");
+    return -EINVAL;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_sensor,
     SHELL_CMD_ARG(surface, NULL, "Read surface quality. Usage: surface [--accum-ms N]", cmd_sensor_surface, 1, 2),
+    SHELL_CMD_ARG(stream, NULL, "Raw frame capture. Usage: stream [--on|--off]", cmd_sensor_stream, 1, 1),
     SHELL_SUBCMD_SET_END
 );
 SHELL_CMD_REGISTER(sensor, &sub_sensor, "Sensor diagnostics", NULL);

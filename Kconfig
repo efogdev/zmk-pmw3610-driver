@@ -70,6 +70,13 @@ config PMW3610_SMART_ALGORITHM
     The algorithm is used to extend the tracking acrocss a wider range of surfaces
     such as graniles and tiles.
 
+config PMW3610_STREAM_STACK_SIZE
+    int "PMW3610 raw frame stream thread stack size"
+    default 650
+    depends on SHELL
+    help
+      Stack of the thread used by "sensor stream --on" to capture and dump raw frames.
+
 config PMW3610_SQUAL_LOG
     bool "PMW3610's surface quality (0-361) log"
     default n

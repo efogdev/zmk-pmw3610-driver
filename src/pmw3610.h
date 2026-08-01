@@ -44,6 +44,7 @@ extern "C" {
 #define PMW3610_REG_REST3_RATE 0x20
 #define PMW3610_REG_OBSERVATION 0x2D
 
+#define PMW3610_REG_TEST_CLOCK 0x32
 #define PMW3610_REG_PIXEL_GRAB 0x35
 #define PMW3610_REG_FRAME_GRAB 0x36
 
@@ -71,6 +72,16 @@ extern "C" {
 /* spi clock enable/disable commands */
 #define PMW3610_SPI_CLOCK_CMD_ENABLE 0xBA
 #define PMW3610_SPI_CLOCK_CMD_DISABLE 0xB5
+
+/* Frame capture (raw pixel array) commands */
+#define PMW3610_PERF_FRAME_CAPTURE 0xF1
+#define PMW3610_TEST_CLOCK_CMD_ON 0x10
+#define PMW3610_FRAME_GRAB_CMD 0x80
+#define PMW3610_FRAME_GRAB_DELAY_MS 8
+
+/* Pixel array dimensions of a single captured frame */
+#define PMW3610_FRAME_DIM 22
+#define PMW3610_FRAME_SIZE (PMW3610_FRAME_DIM * PMW3610_FRAME_DIM)
 
 /* Max register count readable in a single motion burst */
 #define PMW3610_MAX_BURST_SIZE 10

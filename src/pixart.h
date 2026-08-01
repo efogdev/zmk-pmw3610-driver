@@ -35,6 +35,10 @@ struct pixart_data {
     uint8_t                      data_index;
     int64_t                      dx, dy;
 
+#if IS_ENABLED(CONFIG_SHELL)
+    bool                         streaming; // raw frame capture in progress, navigation is off
+#endif
+
 #if IS_ENABLED(CONFIG_PMW3610_IGNORE_AFTER_REST) || IS_ENABLED(CONFIG_PMW3610_ANTI_WARP)
     uint32_t                     last_data;
 #endif
